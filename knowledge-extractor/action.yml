@@ -6,6 +6,9 @@ inputs:
   anthropic_api_key:
     description: 'Anthropic API key for Claude'
     required: true
+  github_token:
+    description: 'GitHub token for Claude Code Action (use secrets.GITHUB_TOKEN)'
+    required: true
   knowledge_repo_token:
     description: 'GitHub PAT with write access to knowledge-graph repo'
     required: true
@@ -17,6 +20,7 @@ runs:
       uses: actions/checkout@v4
       with:
         fetch-depth: 0
+        ref: ${{ github.event.pull_request.merge_commit_sha }}
 
     - name: Checkout knowledge-graph repo
       uses: actions/checkout@v4
@@ -25,49 +29,98 @@ runs:
         path: knowledge-graph
         token: ${{ inputs.knowledge_repo_token }}
 
-    - name: Extract knowledge with Claude
-      uses: anthropics/claude-code-action@v1
-      with:
-        anthropic_api_key: ${{ inputs.anthropic_api_key }}
-        prompt: |
-          PR #${{ github.event.pull_request.number }} has been merged.
+    - name: Configure git for knowledge-graph
+      shell: bash
+      run: |
+        cd knowledge-graph
+        git config user.name "github-actions[bot]"
+        git config user.email "github-actions[bot]@users.noreply.github.com"
 
-          ## PR Info
-          - Title: ${{ github.event.pull_request.title }}
-          - Repo: ${{ github.repository }}
-          - Base SHA: ${{ github.event.pull_request.base.sha }}
-          - Head SHA: ${{ github.event.pull_request.head.sha }}
+    - name: Install Claude Code
+      shell: bash
+      run: npm install -g @anthropic-ai/claude-code
 
-          ## Instructions
-          Read and follow the rules in `knowledge-graph/.claude/CLAUDE.md`.
+    - name: Process each commit
+      shell: bash
+      env:
+        ANTHROPIC_API_KEY: ${{ inputs.anthropic_api_key }}
+        GITHUB_TOKEN: ${{ inputs.github_token }}
+        MERGE_SHA: ${{ github.event.pull_request.merge_commit_sha }}
+        PR_NUMBER: ${{ github.event.pull_request.number }}
+        PR_TITLE: ${{ github.event.pull_request.title }}
+        REPO: ${{ github.repository }}
+      run: |
+        # Get commits from merge: commits in merge but not in first parent (base branch)
+        # Falls back to merge commit itself for squash/rebase merges
+        COMMITS=$(git log "$MERGE_SHA^1..$MERGE_SHA" --format="%H" --reverse 2>/dev/null || echo "$MERGE_SHA")
+        TOTAL=$(echo "$COMMITS" | wc -l | tr -d ' ')
+        CURRENT=0
 
-          ## Step 1: Get PR Commits
-          Run: `git log ${{ github.event.pull_request.base.sha }}..${{ github.event.pull_request.head.sha }} --oneline`
-          to see all commits in this PR.
+        for SHA in $COMMITS; do
+          CURRENT=$((CURRENT + 1))
+          COMMIT_MSG="$(git log -1 --format='%s' "$SHA")"
+          SHORT_SHA="${SHA:0:7}"
+          echo "=========================================="
+          echo "Processing commit $CURRENT/$TOTAL: $SHA"
+          echo "Message: $COMMIT_MSG"
+          echo "=========================================="
 
-          ## Step 2: Search Existing Knowledge (Efficient!)
-          - Read `knowledge-graph/_meta/tag-index.json` and `knowledge-graph/_meta/file-pattern-index.json`
-          - Match relevant tags/patterns from the PR changes
-          - Load only top 5 related files (max 7 with links)
-          - DO NOT read all knowledge files!
+          cat > /tmp/prompt.txt <<'PROMPT_END'
+        ## Instructions
+        Read and follow the rules in knowledge-graph/.claude/CLAUDE.md.
 
-          ## Step 3: Process Each Commit
-          For each commit:
-          1. Run `git show <sha>` to see changes
-          2. Extract knowledge (concepts, decisions, pitfalls)
-          3. Decide: update existing file or create new
-          4. Add [[wikilinks]] to related knowledge
-          5. Update `_meta/` indices
+        ## Step 1: Analyze Commit
+        Run: git show <SHA>
+        to see the changes in this commit.
 
-          ## Step 4: Commit to knowledge-graph
-          After processing:
-          1. `cd knowledge-graph`
-          2. `git add .`
-          3. `git commit -m "knowledge: extract from ${{ github.repository }}#${{ github.event.pull_request.number }}"`
-          4. `git push`
+        ## Step 2: Search Existing Knowledge (Efficient!)
+        - Read knowledge-graph/_meta/tag-index.json and knowledge-graph/_meta/file-pattern-index.json
+        - Match relevant tags/patterns from the commit changes
+        - Load only top 5 related files (max 7 with links)
+        - DO NOT read all knowledge files!
 
-          ## Constraints
-          - Each knowledge file: max 500 lines
-          - Load max 7 knowledge files total
-          - Always update indices after changes
-        claude_args: "--max-turns 50"
+        ## Step 3: Extract Knowledge
+        1. Extract knowledge (concepts, decisions, pitfalls)
+        2. Decide: update existing file or create new
+        3. Add [[wikilinks]] to related knowledge
+        4. Update _meta/ indices
+
+        ## Step 4: Commit to knowledge-graph
+        After processing:
+        1. cd knowledge-graph
+        2. git add .
+        3. git commit -m "docs(<REPO>): <SHORT_SHA> - <COMMIT_MSG_SHORT>"
+        4. git push
+
+        ## Constraints
+        - Each knowledge file: max 500 lines
+        - Load max 7 knowledge files total
+        - Always update indices after changes
+        - If no knowledge worth extracting, skip and say so
+        PROMPT_END
+
+          COMMIT_MSG_SHORT=$(echo "$COMMIT_MSG" | cut -c1-50)
+          REPO_SHORT=$(echo "$REPO" | cut -d'/' -f2)
+          sed -i "s/<SHA>/$SHA/g" /tmp/prompt.txt
+          sed -i "s/<SHORT_SHA>/$SHORT_SHA/g" /tmp/prompt.txt
+          sed -i "s/<REPO>/$REPO_SHORT/g" /tmp/prompt.txt
+          sed -i "s/<COMMIT_MSG_SHORT>/$COMMIT_MSG_SHORT/g" /tmp/prompt.txt
+
+          {
+            echo "Commit $SHA has been merged in PR #$PR_NUMBER."
+            echo ""
+            echo "## Commit Info"
+            echo "- SHA: $SHA"
+            echo "- Message: $COMMIT_MSG"
+            echo "- Repo: $REPO"
+            echo "- PR: #$PR_NUMBER - $PR_TITLE"
+            echo ""
+            cat /tmp/prompt.txt
+          } | claude --print --model claude-opus-4-5-20251101 --max-turns 30 \
+            --add-dir knowledge-graph \
+            --allowedTools "Write,Bash,Edit"
+
+          echo "Completed commit $CURRENT/$TOTAL"
+        done
+
+        echo "All commits processed!"
