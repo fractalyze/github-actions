@@ -50,8 +50,10 @@ runs:
         PR_TITLE: ${{ github.event.pull_request.title }}
         REPO: ${{ github.repository }}
       run: |
-        # Get commits from merge: commits in merge but not in first parent (base branch)
-        # Falls back to merge commit itself for squash/rebase merges
+        echo "Fetching PR context..."
+        PR_BODY=$(gh pr view "$PR_NUMBER" --json body --jq '.body // ""')
+        PR_COMMENTS=$(gh pr view "$PR_NUMBER" --json comments --jq '[.comments[].body] | join("\n---\n")' | head -c 5000)
+
         COMMITS=$(git log "$MERGE_SHA^1..$MERGE_SHA" --format="%H" --reverse 2>/dev/null || echo "$MERGE_SHA")
         TOTAL=$(echo "$COMMITS" | wc -l | tr -d ' ')
         CURRENT=0
@@ -60,63 +62,60 @@ runs:
           CURRENT=$((CURRENT + 1))
           COMMIT_MSG="$(git log -1 --format='%s' "$SHA")"
           SHORT_SHA="${SHA:0:7}"
+          COMMIT_MSG_SHORT=$(echo "$COMMIT_MSG" | head -n1)
+          REPO_SHORT=$(echo "$REPO" | cut -d'/' -f2)
           echo "=========================================="
           echo "Processing commit $CURRENT/$TOTAL: $SHA"
           echo "Message: $COMMIT_MSG"
           echo "=========================================="
 
-          cat > /tmp/prompt.txt <<'PROMPT_END'
-        ## Instructions
+          PROMPT="Commit $SHA has been merged in PR #$PR_NUMBER.
+
+        Commit Info:
+        - SHA: $SHA
+        - Message: $COMMIT_MSG
+        - Repo: $REPO
+        - PR: #$PR_NUMBER - $PR_TITLE
+
+        PR Description:
+        $PR_BODY
+
+        PR Discussion:
+        $PR_COMMENTS
+
+        Instructions:
         Read and follow the rules in knowledge-graph/.claude/CLAUDE.md.
 
-        ## Step 1: Analyze Commit
-        Run: git show <SHA>
+        Step 1: Analyze Commit
+        Run: git show $SHA
         to see the changes in this commit.
 
-        ## Step 2: Search Existing Knowledge (Efficient!)
+        Step 2: Search Existing Knowledge (Efficient!)
         - Read knowledge-graph/_meta/tag-index.json and knowledge-graph/_meta/file-pattern-index.json
         - Match relevant tags/patterns from the commit changes
         - Load only top 5 related files (max 7 with links)
         - DO NOT read all knowledge files!
 
-        ## Step 3: Extract Knowledge
+        Step 3: Extract Knowledge
         1. Extract knowledge (concepts, decisions, pitfalls)
         2. Decide: update existing file or create new
         3. Add [[wikilinks]] to related knowledge
         4. Update _meta/ indices
 
-        ## Step 4: Commit to knowledge-graph
+        Step 4: Commit to knowledge-graph
         After processing:
         1. cd knowledge-graph
         2. git add .
-        3. git commit -m "docs(<REPO>): <SHORT_SHA> - <COMMIT_MSG_SHORT>"
+        3. git commit -m 'docs($REPO_SHORT): $SHORT_SHA - $COMMIT_MSG_SHORT'
         4. git push
 
-        ## Constraints
+        Constraints:
         - Each knowledge file: max 500 lines
         - Load max 7 knowledge files total
         - Always update indices after changes
-        - If no knowledge worth extracting, skip and say so
-        PROMPT_END
+        - If no knowledge worth extracting, skip and say so"
 
-          COMMIT_MSG_SHORT=$(echo "$COMMIT_MSG" | cut -c1-50)
-          REPO_SHORT=$(echo "$REPO" | cut -d'/' -f2)
-          sed -i "s/<SHA>/$SHA/g" /tmp/prompt.txt
-          sed -i "s/<SHORT_SHA>/$SHORT_SHA/g" /tmp/prompt.txt
-          sed -i "s/<REPO>/$REPO_SHORT/g" /tmp/prompt.txt
-          sed -i "s/<COMMIT_MSG_SHORT>/$COMMIT_MSG_SHORT/g" /tmp/prompt.txt
-
-          {
-            echo "Commit $SHA has been merged in PR #$PR_NUMBER."
-            echo ""
-            echo "## Commit Info"
-            echo "- SHA: $SHA"
-            echo "- Message: $COMMIT_MSG"
-            echo "- Repo: $REPO"
-            echo "- PR: #$PR_NUMBER - $PR_TITLE"
-            echo ""
-            cat /tmp/prompt.txt
-          } | claude --print --model claude-opus-4-5-20251101 --max-turns 30 \
+          echo "$PROMPT" | claude --print --model claude-opus-4-5-20251101 --max-turns 30 \
             --add-dir knowledge-graph \
             --allowedTools "Write,Bash,Edit"
 
