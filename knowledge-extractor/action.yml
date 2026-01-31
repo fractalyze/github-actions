@@ -90,17 +90,24 @@ runs:
         Run: git show $SHA
         to see the changes in this commit.
 
-        Step 2: Search Existing Knowledge (Efficient!)
-        - Read knowledge-graph/_meta/tag-index.json and knowledge-graph/_meta/file-pattern-index.json
-        - Match relevant tags/patterns from the commit changes
-        - Load only top 5 related files (max 7 with links)
+        Step 2: Search Existing Knowledge
+        Follow the search algorithm in knowledge-graph/_meta/SEARCH.md:
+        1. Read _meta/SEARCH.md first
+        2. Use hierarchical module search, keyword search, pattern/tag search
+        3. Score and rank results, select top 7 files
         - DO NOT read all knowledge files!
 
         Step 3: Extract Knowledge
-        1. Extract knowledge (concepts, decisions, pitfalls)
+        1. Extract knowledge (concepts, conventions, decisions, pitfalls)
         2. Decide: update existing file or create new
         3. Add [[wikilinks]] to related knowledge
-        4. Update _meta/ indices
+        4. Update ALL _meta/ indices:
+           - tag-index.json
+           - file-pattern-index.json
+           - link-graph.json
+           - module-index.json (directory → knowledge)
+           - keyword-index.json (key terms from content)
+           - repo-index.json (repo → knowledge, "*" for common)
 
         Step 4: Commit to knowledge-graph
         After processing:

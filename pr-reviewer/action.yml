@@ -1,0 +1,122 @@
+name: 'PR Reviewer'
+description: 'Automated PR review using knowledge-graph context'
+author: 'fractalyze'
+
+inputs:
+  anthropic_api_key:
+    description: 'Anthropic API key for Claude'
+    required: true
+  github_token:
+    description: 'GitHub token for posting review comments'
+    required: true
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Checkout source repo
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+
+    - name: Checkout knowledge-graph repo
+      uses: actions/checkout@v4
+      with:
+        repository: fractalyze/knowledge-graph
+        path: knowledge-graph
+        token: ${{ inputs.github_token }}
+
+    - name: Checkout .claude repo
+      uses: actions/checkout@v4
+      with:
+        repository: fractalyze/.claude
+        path: dot-claude
+        token: ${{ inputs.github_token }}
+
+    - name: Install Claude Code
+      shell: bash
+      run: npm install -g @anthropic-ai/claude-code
+
+    - name: Run PR Review
+      shell: bash
+      env:
+        ANTHROPIC_API_KEY: ${{ inputs.anthropic_api_key }}
+        GITHUB_TOKEN: ${{ inputs.github_token }}
+        PR_NUMBER: ${{ github.event.pull_request.number }}
+        PR_TITLE: ${{ github.event.pull_request.title }}
+        REPO: ${{ github.repository }}
+        BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+      run: |
+        echo "Fetching PR context..."
+        PR_BODY=$(gh pr view "$PR_NUMBER" --json body --jq '.body // ""')
+
+        PROMPT="Review PR #$PR_NUMBER in $REPO.
+
+        PR Info:
+        - Title: $PR_TITLE
+        - Base: $BASE_SHA
+        - Head: $HEAD_SHA
+
+        PR Description:
+        $PR_BODY
+
+        Instructions:
+        Read dot-claude/agents/pr-reviewer/AGENT.md for full review guidelines.
+
+        Phase 0: Context Retrieval
+        1. Get diff: git diff $BASE_SHA...$HEAD_SHA
+        2. Extract changed file paths
+        3. Follow knowledge-graph/_meta/SEARCH.md algorithm:
+           - Hierarchical module search
+           - Keyword search from diff
+           - Pattern/tag matching
+           - Link expansion (1-hop)
+        4. Load top 7 relevant knowledge files
+
+        Phase 1: Analyze from 3 perspectives
+
+        1. Convention Reviewer:
+           - Knowledge: conventions/
+           - Question: 'Does this follow project standards?'
+
+        2. Pitfall Reviewer:
+           - Knowledge: pitfalls/
+           - Question: 'Is this a known mistake pattern?'
+
+        3. Architecture Reviewer:
+           - Knowledge: decisions/, concepts/
+           - Question: 'Does this align with design principles?'
+
+        Phase 2: Synthesize Review
+        1. Combine findings from all perspectives
+        2. Remove duplicates
+        3. Sort by severity: Critical > High > Medium > Low
+
+        Output Format:
+        Post review comments using gh CLI:
+        - For file-specific issues: gh api repos/$REPO/pulls/$PR_NUMBER/comments -f body='...' -f path='file.cpp' -f line=123 -f side='RIGHT' -f commit_id='$HEAD_SHA'
+        - For general comments: gh pr comment $PR_NUMBER --body '...'
+
+        IMPORTANT: Every comment MUST end with this signature:
+        <!-- pr-reviewer-bot -->
+
+        Review Comment Format:
+        **[Severity]** Category
+        Description of the issue.
+        Suggestion: How to fix it.
+
+        <!-- pr-reviewer-bot -->
+
+        Constraints:
+        - Only comment when confident about the issue
+        - Avoid noise - uncertain issues should be skipped
+        - Be specific and actionable
+        - Reference knowledge files when applicable: 'See [[pitfall-name]]'
+        - If code looks good, post a brief approval comment"
+
+        echo "$PROMPT" | claude --print --model claude-sonnet-4-20250514 --max-turns 20 \
+          --add-dir knowledge-graph \
+          --add-dir dot-claude \
+          --allowedTools "Read,Grep,Glob,Bash"
+
+        echo "PR review completed!"
