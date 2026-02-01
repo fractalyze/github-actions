@@ -35,7 +35,7 @@ runs:
       uses: actions/checkout@v4
       with:
         repository: fractalyze/.claude
-        path: dot-claude
+        path: .claude
         token: ${{ inputs.claude_repo_token }}
 
     - name: Install Claude Code
@@ -56,89 +56,63 @@ runs:
         echo "Fetching PR context..."
         PR_BODY=$(gh pr view "$PR_NUMBER" --json body --jq '.body // ""')
 
-        # Load skill + references
-        PR_REVIEW_SKILL=$(cat dot-claude/skills/pr-review/SKILL.md)
-        MULTI_AGENT_PATTERNS=$(cat dot-claude/skills/pr-review/references/multi-agent-patterns.md)
-        LOAD_KNOWLEDGE=$(cat dot-claude/skills/load-knowledge/SKILL.md)
+        # Register 4 sub-agents via --agents flag
+        # Each agent reads its own instructions from .claude/agents/
+        AGENTS_JSON='{
+          "convention-reviewer": {
+            "description": "Review code from convention perspective",
+            "model": "haiku",
+            "prompt": "You are convention-reviewer. Read your instructions from .claude/agents/pr-reviewer/sub-agents/convention-reviewer.md and follow them exactly."
+          },
+          "pitfall-reviewer": {
+            "description": "Review code for known pitfalls and bugs",
+            "model": "haiku",
+            "prompt": "You are pitfall-reviewer. Read your instructions from .claude/agents/pr-reviewer/sub-agents/pitfall-reviewer.md and follow them exactly."
+          },
+          "architecture-reviewer": {
+            "description": "Review code from architecture perspective",
+            "model": "sonnet",
+            "prompt": "You are architecture-reviewer. Read your instructions from .claude/agents/pr-reviewer/sub-agents/architecture-reviewer.md and follow them exactly."
+          },
+          "porting-reviewer": {
+            "description": "Review XLA to ZKX porting quality",
+            "model": "haiku",
+            "prompt": "You are porting-reviewer. Read your instructions from .claude/agents/pr-reviewer/sub-agents/porting-reviewer.md and follow them exactly."
+          }
+        }'
 
-        # Load main agent + sub-agents (4 agents)
-        MAIN_AGENT=$(cat dot-claude/agents/pr-reviewer/AGENT.md)
-        CONVENTION=$(cat dot-claude/agents/pr-reviewer/sub-agents/convention-reviewer.md)
-        PITFALL=$(cat dot-claude/agents/pr-reviewer/sub-agents/pitfall-reviewer.md)
-        ARCHITECTURE=$(cat dot-claude/agents/pr-reviewer/sub-agents/architecture-reviewer.md)
-        PORTING=$(cat dot-claude/agents/pr-reviewer/sub-agents/porting-reviewer.md)
-
+        # Main prompt - short and focused
         PROMPT="Review PR #$PR_NUMBER in $REPO.
 
-        # PR Context
-
+        ## PR Context
         - Title: $PR_TITLE
         - Base: $BASE_SHA
         - Head: $HEAD_SHA
-        - Diff command: git diff $BASE_SHA...$HEAD_SHA
+        - Diff: git diff $BASE_SHA...$HEAD_SHA
 
         ## PR Description
         $PR_BODY
 
-        ---
+        ## Instructions
+        1. Read .claude/agents/pr-reviewer/AGENT.md for your role
+        2. Read .claude/skills/pr-review/SKILL.md for the workflow
+        3. Follow the workflow exactly:
+           - Get diff and detect if porting PR
+           - Spawn 4 sub-agents in parallel using Task tool
+           - Merge and deduplicate results
+           - Post resolvable line-level comments via GitHub Review API
 
-        # Main Agent
-        $MAIN_AGENT
-
-        ---
-
-        # Workflow (follow this)
-        $PR_REVIEW_SKILL
-
-        ---
-
-        # Sub-Agents (spawn with Task tool - 4 agents in parallel)
-
-        ## convention-reviewer
-        $CONVENTION
-
-        ## pitfall-reviewer
-        $PITFALL
-
-        ## architecture-reviewer
-        $ARCHITECTURE
-
-        ## porting-reviewer
-        $PORTING
-
-        ---
-
-        # Skills
-
-        ## /load-knowledge
-        $LOAD_KNOWLEDGE
-
-        ---
-
-        # References
-
-        ## Multi-Agent Patterns
-        $MULTI_AGENT_PATTERNS
-
-        ---
-
-        # Execute
-
-        Follow the PR Review Skill workflow above:
-        1. Get diff: git diff $BASE_SHA...$HEAD_SHA
-        2. Detect if porting PR (title contains 'port', 'xla', or files from xla/ to zkx/)
-        3. Spawn 4 sub-agents in parallel using Task tool
-        4. Merge and deduplicate results
-        5. Post resolvable line-level comments using GitHub Review API
-
-        IMPORTANT:
+        ## Critical Requirements
         - Every comment MUST include [[wikilink]] to knowledge reference
         - Use resolvable line-level comments (GitHub Review API)
-        - If porting PR detected, ensure porting-reviewer provides porting-specific feedback"
+        - Max 10 comments, confidence > 80% only"
 
-        echo "$PROMPT" | claude --print --model claude-sonnet-4-20250514 --max-turns 50 \
+        echo "$PROMPT" | claude --print \
+          --model claude-opus-4-20250514 \
+          --max-turns 50 \
+          --add-dir .claude \
           --add-dir knowledge-graph \
-          --add-dir dot-claude \
+          --agents "$AGENTS_JSON" \
           --allowedTools "Read,Grep,Glob,Bash,Task"
 
         echo "PR review completed!"
