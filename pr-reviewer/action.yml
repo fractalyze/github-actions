@@ -9,6 +9,12 @@ inputs:
   github_token:
     description: 'GitHub token for posting review comments'
     required: true
+  knowledge_repo_token:
+    description: 'GitHub PAT with read access to knowledge-graph repo'
+    required: true
+  claude_repo_token:
+    description: 'GitHub PAT with read access to .claude repo'
+    required: true
 
 runs:
   using: 'composite'
@@ -23,14 +29,14 @@ runs:
       with:
         repository: fractalyze/knowledge-graph
         path: knowledge-graph
-        token: ${{ inputs.github_token }}
+        token: ${{ inputs.knowledge_repo_token }}
 
     - name: Checkout .claude repo
       uses: actions/checkout@v4
       with:
         repository: fractalyze/.claude
         path: dot-claude
-        token: ${{ inputs.github_token }}
+        token: ${{ inputs.claude_repo_token }}
 
     - name: Install Claude Code
       shell: bash
