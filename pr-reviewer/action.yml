@@ -1,5 +1,5 @@
 name: 'PR Reviewer'
-description: 'Automated PR review using knowledge-graph context'
+description: 'Automated PR review using knowledge-graph context with multi-agent architecture'
 author: 'fractalyze'
 
 inputs:
@@ -56,50 +56,79 @@ runs:
         echo "Fetching PR context..."
         PR_BODY=$(gh pr view "$PR_NUMBER" --json body --jq '.body // ""')
 
-        # Load skills
-        LOAD_KNOWLEDGE_SKILL=$(cat dot-claude/skills/load-knowledge/SKILL.md)
-        REVIEW_CHANGES_SKILL=$(cat dot-claude/skills/review-changes/SKILL.md)
+        # Load skill + references
+        PR_REVIEW_SKILL=$(cat dot-claude/skills/pr-review/SKILL.md)
+        MULTI_AGENT_PATTERNS=$(cat dot-claude/skills/pr-review/references/multi-agent-patterns.md)
+        LOAD_KNOWLEDGE=$(cat dot-claude/skills/load-knowledge/SKILL.md)
+
+        # Load main agent + sub-agents
+        MAIN_AGENT=$(cat dot-claude/agents/pr-reviewer/AGENT.md)
+        CONVENTION=$(cat dot-claude/agents/pr-reviewer/sub-agents/convention-reviewer.md)
+        PITFALL=$(cat dot-claude/agents/pr-reviewer/sub-agents/pitfall-reviewer.md)
+        ARCHITECTURE=$(cat dot-claude/agents/pr-reviewer/sub-agents/architecture-reviewer.md)
 
         PROMPT="Review PR #$PR_NUMBER in $REPO.
 
-        PR Info:
+        # PR Context
+
         - Title: $PR_TITLE
         - Base: $BASE_SHA
         - Head: $HEAD_SHA
+        - Diff command: git diff $BASE_SHA...$HEAD_SHA
 
-        PR Description:
+        ## PR Description
         $PR_BODY
 
         ---
 
-        # Skills Reference
-
-        ## load-knowledge skill
-        $LOAD_KNOWLEDGE_SKILL
-
-        ## review-changes skill
-        $REVIEW_CHANGES_SKILL
+        # Main Agent
+        $MAIN_AGENT
 
         ---
 
-        # Instructions
+        # Workflow (follow this)
+        $PR_REVIEW_SKILL
 
+        ---
+
+        # Sub-Agents (spawn with Task tool)
+
+        ## convention-reviewer
+        $CONVENTION
+
+        ## pitfall-reviewer
+        $PITFALL
+
+        ## architecture-reviewer
+        $ARCHITECTURE
+
+        ---
+
+        # Skills
+
+        ## /load-knowledge
+        $LOAD_KNOWLEDGE
+
+        ---
+
+        # References
+
+        ## Multi-Agent Patterns
+        $MULTI_AGENT_PATTERNS
+
+        ---
+
+        # Execute
+
+        Follow the PR Review Skill workflow above:
         1. Get diff: git diff $BASE_SHA...$HEAD_SHA
-        2. Follow load-knowledge skill to load relevant knowledge from knowledge-graph/
-        3. Follow review-changes skill to review the diff
+        2. Spawn 3 sub-agents in parallel using Task tool
+        3. Merge and deduplicate results
+        4. Post comments using gh CLI"
 
-        # Output
-
-        Post review comments using gh CLI:
-        - File-specific: gh api repos/$REPO/pulls/$PR_NUMBER/comments -f body='...' -f path='file.cpp' -f line=123 -f side='RIGHT' -f commit_id='$HEAD_SHA'
-        - General: gh pr comment $PR_NUMBER --body '...'
-
-        IMPORTANT: Every comment MUST end with:
-        <!-- pr-reviewer-bot -->"
-
-        echo "$PROMPT" | claude --print --model claude-sonnet-4-20250514 --max-turns 20 \
+        echo "$PROMPT" | claude --print --model claude-sonnet-4-20250514 --max-turns 50 \
           --add-dir knowledge-graph \
           --add-dir dot-claude \
-          --allowedTools "Read,Grep,Glob,Bash"
+          --allowedTools "Read,Grep,Glob,Bash,Task"
 
         echo "PR review completed!"
