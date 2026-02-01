@@ -50,6 +50,10 @@ runs:
         echo "Fetching PR context..."
         PR_BODY=$(gh pr view "$PR_NUMBER" --json body --jq '.body // ""')
 
+        # Load skills
+        LOAD_KNOWLEDGE_SKILL=$(cat dot-claude/skills/load-knowledge/SKILL.md)
+        REVIEW_CHANGES_SKILL=$(cat dot-claude/skills/review-changes/SKILL.md)
+
         PROMPT="Review PR #$PR_NUMBER in $REPO.
 
         PR Info:
@@ -60,59 +64,32 @@ runs:
         PR Description:
         $PR_BODY
 
-        Instructions:
-        Read dot-claude/agents/pr-reviewer/AGENT.md for full review guidelines.
+        ---
 
-        Phase 0: Context Retrieval
+        # Skills Reference
+
+        ## load-knowledge skill
+        $LOAD_KNOWLEDGE_SKILL
+
+        ## review-changes skill
+        $REVIEW_CHANGES_SKILL
+
+        ---
+
+        # Instructions
+
         1. Get diff: git diff $BASE_SHA...$HEAD_SHA
-        2. Extract changed file paths
-        3. Follow knowledge-graph/_meta/SEARCH.md algorithm:
-           - Hierarchical module search
-           - Keyword search from diff
-           - Pattern/tag matching
-           - Link expansion (1-hop)
-        4. Load top 7 relevant knowledge files
+        2. Follow load-knowledge skill to load relevant knowledge from knowledge-graph/
+        3. Follow review-changes skill to review the diff
 
-        Phase 1: Analyze from 3 perspectives
+        # Output
 
-        1. Convention Reviewer:
-           - Knowledge: conventions/
-           - Question: 'Does this follow project standards?'
-
-        2. Pitfall Reviewer:
-           - Knowledge: pitfalls/
-           - Question: 'Is this a known mistake pattern?'
-
-        3. Architecture Reviewer:
-           - Knowledge: decisions/, concepts/
-           - Question: 'Does this align with design principles?'
-
-        Phase 2: Synthesize Review
-        1. Combine findings from all perspectives
-        2. Remove duplicates
-        3. Sort by severity: Critical > High > Medium > Low
-
-        Output Format:
         Post review comments using gh CLI:
-        - For file-specific issues: gh api repos/$REPO/pulls/$PR_NUMBER/comments -f body='...' -f path='file.cpp' -f line=123 -f side='RIGHT' -f commit_id='$HEAD_SHA'
-        - For general comments: gh pr comment $PR_NUMBER --body '...'
+        - File-specific: gh api repos/$REPO/pulls/$PR_NUMBER/comments -f body='...' -f path='file.cpp' -f line=123 -f side='RIGHT' -f commit_id='$HEAD_SHA'
+        - General: gh pr comment $PR_NUMBER --body '...'
 
-        IMPORTANT: Every comment MUST end with this signature:
-        <!-- pr-reviewer-bot -->
-
-        Review Comment Format:
-        **[Severity]** Category
-        Description of the issue.
-        Suggestion: How to fix it.
-
-        <!-- pr-reviewer-bot -->
-
-        Constraints:
-        - Only comment when confident about the issue
-        - Avoid noise - uncertain issues should be skipped
-        - Be specific and actionable
-        - Reference knowledge files when applicable: 'See [[pitfall-name]]'
-        - If code looks good, post a brief approval comment"
+        IMPORTANT: Every comment MUST end with:
+        <!-- pr-reviewer-bot -->"
 
         echo "$PROMPT" | claude --print --model claude-sonnet-4-20250514 --max-turns 20 \
           --add-dir knowledge-graph \
