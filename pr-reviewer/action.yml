@@ -61,11 +61,12 @@ runs:
         MULTI_AGENT_PATTERNS=$(cat dot-claude/skills/pr-review/references/multi-agent-patterns.md)
         LOAD_KNOWLEDGE=$(cat dot-claude/skills/load-knowledge/SKILL.md)
 
-        # Load main agent + sub-agents
+        # Load main agent + sub-agents (4 agents)
         MAIN_AGENT=$(cat dot-claude/agents/pr-reviewer/AGENT.md)
         CONVENTION=$(cat dot-claude/agents/pr-reviewer/sub-agents/convention-reviewer.md)
         PITFALL=$(cat dot-claude/agents/pr-reviewer/sub-agents/pitfall-reviewer.md)
         ARCHITECTURE=$(cat dot-claude/agents/pr-reviewer/sub-agents/architecture-reviewer.md)
+        PORTING=$(cat dot-claude/agents/pr-reviewer/sub-agents/porting-reviewer.md)
 
         PROMPT="Review PR #$PR_NUMBER in $REPO.
 
@@ -91,7 +92,7 @@ runs:
 
         ---
 
-        # Sub-Agents (spawn with Task tool)
+        # Sub-Agents (spawn with Task tool - 4 agents in parallel)
 
         ## convention-reviewer
         $CONVENTION
@@ -101,6 +102,9 @@ runs:
 
         ## architecture-reviewer
         $ARCHITECTURE
+
+        ## porting-reviewer
+        $PORTING
 
         ---
 
@@ -122,9 +126,15 @@ runs:
 
         Follow the PR Review Skill workflow above:
         1. Get diff: git diff $BASE_SHA...$HEAD_SHA
-        2. Spawn 3 sub-agents in parallel using Task tool
-        3. Merge and deduplicate results
-        4. Post comments using gh CLI"
+        2. Detect if porting PR (title contains 'port', 'xla', or files from xla/ to zkx/)
+        3. Spawn 4 sub-agents in parallel using Task tool
+        4. Merge and deduplicate results
+        5. Post resolvable line-level comments using GitHub Review API
+
+        IMPORTANT:
+        - Every comment MUST include [[wikilink]] to knowledge reference
+        - Use resolvable line-level comments (GitHub Review API)
+        - If porting PR detected, ensure porting-reviewer provides porting-specific feedback"
 
         echo "$PROMPT" | claude --print --model claude-sonnet-4-20250514 --max-turns 50 \
           --add-dir knowledge-graph \
