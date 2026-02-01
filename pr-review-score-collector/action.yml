@@ -3,9 +3,6 @@ description: 'Collect reactions from pr-reviewer comments and update trust score
 author: 'fractalyze'
 
 inputs:
-  anthropic_api_key:
-    description: 'Anthropic API key for Claude'
-    required: true
   github_token:
     description: 'GitHub token for API access'
     required: true
@@ -23,89 +20,32 @@ runs:
         path: dot-claude
         token: ${{ inputs.claude_repo_token }}
 
-    - name: Configure git for .claude
+    - name: Configure git
       shell: bash
       run: |
         cd dot-claude
         git config user.name "github-actions[bot]"
         git config user.email "github-actions[bot]@users.noreply.github.com"
 
-    - name: Install Claude Code
-      shell: bash
-      run: npm install -g @anthropic-ai/claude-code
+    - name: Setup Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
 
-    - name: Collect Reactions and Update Score
+    - name: Collect reactions and update score
       shell: bash
       env:
-        ANTHROPIC_API_KEY: ${{ inputs.anthropic_api_key }}
         GITHUB_TOKEN: ${{ inputs.github_token }}
-        PR_NUMBER: ${{ github.event.pull_request.number }}
         REPO: ${{ github.repository }}
+        PR_NUMBER: ${{ github.event.pull_request.number }}
+        METRICS_DIR: dot-claude/agents/pr-reviewer/metrics
       run: |
-        PROMPT="Collect reactions from pr-reviewer bot comments and update trust score.
+        python ${{ github.action_path }}/scripts/collect.py
 
-        PR Info:
-        - Repo: $REPO
-        - PR: #$PR_NUMBER
-
-        Step 1: Find pr-reviewer bot comments
-        Get comments with '<!-- pr-reviewer-bot -->' signature:
-
-        PR review comments:
-        gh api repos/$REPO/pulls/$PR_NUMBER/comments --jq '[.[] | select(.body | contains(\"<!-- pr-reviewer-bot -->\")) | {id, body}]'
-
-        Issue comments:
-        gh api repos/$REPO/issues/$PR_NUMBER/comments --jq '[.[] | select(.body | contains(\"<!-- pr-reviewer-bot -->\")) | {id, body}]'
-
-        Step 2: Get reactions for each comment
-        For PR comments: gh api repos/$REPO/pulls/comments/{id}/reactions
-        For issue comments: gh api repos/$REPO/issues/comments/{id}/reactions
-
-        Step 3: Count reactions
-        - 🎉 (hooray): insightful
-        - 👍 (+1): helpful
-        - 👎 (-1): wrong/noise
-
-        Step 4: Calculate PR score
-        Formula: (🎉_count - 2 × 👎_count) / comment_count
-        Clamp result to [-2, +1]
-
-        Step 5: Update metrics in dot-claude/agents/pr-reviewer/metrics/
-
-        5a. Append to history/YYYY-MM.json:
-        {
-          \"month\": \"YYYY-MM\",
-          \"prs\": [
-            {
-              \"repo\": \"$REPO\",
-              \"pr\": $PR_NUMBER,
-              \"date\": \"YYYY-MM-DD\",
-              \"comments\": <count>,
-              \"reactions\": {\"🎉\": N, \"👍\": N, \"👎\": N},
-              \"score\": <calculated>
-            }
-          ]
-        }
-
-        5b. Recalculate and update summary.json:
-        - Read all history/*.json files
-        - Calculate average PR score across all PRs
-        - overall_score = 5 + (avg_pr_score × 5)
-        - Update total_prs and last_updated
-
-        Step 6: Commit and push
+    - name: Commit and push
+      shell: bash
+      run: |
         cd dot-claude
         git add agents/pr-reviewer/metrics/
-        git commit -m 'metrics(pr-reviewer): update score from $REPO#$PR_NUMBER'
+        git diff --cached --quiet || git commit -m "docs: update pr-reviewer-metric from ${{ github.repository }}#${{ github.event.pull_request.number }}"
         git push
-
-        Constraints:
-        - If no pr-reviewer comments found, skip silently
-        - If no reactions found, still record PR with score 0
-        - Create history file if not exists"
-
-        echo "$PROMPT" | claude --print --model claude-haiku-4-20250514 --max-turns 15 \
-          --add-dir dot-claude \
-          --allowedTools "Read,Write,Edit,Bash"
-
-        echo "Score collection completed!"
