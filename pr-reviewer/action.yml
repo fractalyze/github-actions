@@ -47,72 +47,14 @@ runs:
       env:
         ANTHROPIC_API_KEY: ${{ inputs.anthropic_api_key }}
         GITHUB_TOKEN: ${{ inputs.github_token }}
-        PR_NUMBER: ${{ github.event.pull_request.number }}
-        PR_TITLE: ${{ github.event.pull_request.title }}
-        REPO: ${{ github.repository }}
-        BASE_SHA: ${{ github.event.pull_request.base.sha }}
-        HEAD_SHA: ${{ github.event.pull_request.head.sha }}
       run: |
-        echo "Fetching PR context..."
-        PR_BODY=$(gh pr view "$PR_NUMBER" --json body --jq '.body // ""')
+        PR_URL="https://github.com/${{ github.repository }}/pull/${{ github.event.pull_request.number }}"
 
-        # Register 4 sub-agents via --agents flag
-        # Each agent reads its own instructions from .claude/agents/
-        AGENTS_JSON='{
-          "convention-reviewer": {
-            "description": "Review code from convention perspective",
-            "model": "haiku",
-            "prompt": "You are convention-reviewer. Read your instructions from .claude/agents/pr-reviewer/sub-agents/convention-reviewer.md and follow them exactly."
-          },
-          "pitfall-reviewer": {
-            "description": "Review code for known pitfalls and bugs",
-            "model": "haiku",
-            "prompt": "You are pitfall-reviewer. Read your instructions from .claude/agents/pr-reviewer/sub-agents/pitfall-reviewer.md and follow them exactly."
-          },
-          "architecture-reviewer": {
-            "description": "Review code from architecture perspective",
-            "model": "sonnet",
-            "prompt": "You are architecture-reviewer. Read your instructions from .claude/agents/pr-reviewer/sub-agents/architecture-reviewer.md and follow them exactly."
-          },
-          "porting-reviewer": {
-            "description": "Review XLA to ZKX porting quality",
-            "model": "haiku",
-            "prompt": "You are porting-reviewer. Read your instructions from .claude/agents/pr-reviewer/sub-agents/porting-reviewer.md and follow them exactly."
-          }
-        }'
-
-        # Main prompt - short and focused
-        PROMPT="Review PR #$PR_NUMBER in $REPO.
-
-        ## PR Context
-        - Title: $PR_TITLE
-        - Base: $BASE_SHA
-        - Head: $HEAD_SHA
-        - Diff: git diff $BASE_SHA...$HEAD_SHA
-
-        ## PR Description
-        $PR_BODY
-
-        ## Instructions
-        1. Read .claude/agents/pr-reviewer/AGENT.md for your role
-        2. Read .claude/skills/pr-review/SKILL.md for the workflow
-        3. Follow the workflow exactly:
-           - Get diff and detect if porting PR
-           - Spawn 4 sub-agents in parallel using Task tool
-           - Merge and deduplicate results
-           - Post resolvable line-level comments via GitHub Review API
-
-        ## Critical Requirements
-        - Every comment MUST include [[wikilink]] to knowledge reference
-        - Use resolvable line-level comments (GitHub Review API)
-        - Max 10 comments, confidence > 80% only"
-
-        echo "$PROMPT" | claude --print \
-          --model claude-opus-4-20250514 \
+        echo "/pr-review $PR_URL" | claude --print \
+          --model claude-sonnet-4-20250514 \
           --max-turns 50 \
           --add-dir .claude \
           --add-dir knowledge-graph \
-          --agents "$AGENTS_JSON" \
-          --allowedTools "Read,Grep,Glob,Bash,Task"
+          --allowedTools "Read,Grep,Glob,Bash,Task,Skill"
 
         echo "PR review completed!"
