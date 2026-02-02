@@ -15,6 +15,9 @@ inputs:
   claude_repo_token:
     description: 'GitHub PAT with read access to .claude repo'
     required: true
+  pr_number:
+    description: 'PR number (optional, for manual trigger)'
+    required: false
 
 runs:
   using: 'composite'
@@ -46,6 +49,21 @@ runs:
         git config user.name "github-actions[bot]"
         git config user.email "github-actions[bot]@users.noreply.github.com"
 
+    - name: Get PR info (for manual trigger)
+      if: ${{ inputs.pr_number != '' }}
+      shell: bash
+      env:
+        GITHUB_TOKEN: ${{ inputs.github_token }}
+        PR_NUMBER: ${{ inputs.pr_number }}
+        REPO: ${{ github.repository }}
+      run: |
+        PR_INFO=$(gh api repos/$REPO/pulls/$PR_NUMBER)
+        MERGE_SHA=$(echo "$PR_INFO" | jq -r '.merge_commit_sha')
+        echo "MANUAL_MERGE_SHA=$MERGE_SHA" >> $GITHUB_ENV
+        echo "MANUAL_PR_NUMBER=$PR_NUMBER" >> $GITHUB_ENV
+        git fetch origin $MERGE_SHA
+        git checkout $MERGE_SHA
+
     - name: Install Claude Code
       shell: bash
       run: npm install -g @anthropic-ai/claude-code
@@ -55,10 +73,14 @@ runs:
       env:
         ANTHROPIC_API_KEY: ${{ inputs.anthropic_api_key }}
         GITHUB_TOKEN: ${{ inputs.github_token }}
-        MERGE_SHA: ${{ github.event.pull_request.merge_commit_sha }}
-        PR_NUMBER: ${{ github.event.pull_request.number }}
+        EVENT_MERGE_SHA: ${{ github.event.pull_request.merge_commit_sha }}
+        EVENT_PR_NUMBER: ${{ github.event.pull_request.number }}
         REPO: ${{ github.repository }}
       run: |
+        # Use manual trigger values if available, otherwise use event values
+        MERGE_SHA="${MANUAL_MERGE_SHA:-$EVENT_MERGE_SHA}"
+        PR_NUMBER="${MANUAL_PR_NUMBER:-$EVENT_PR_NUMBER}"
+
         # Calculate max turns based on commit count
         COMMIT_COUNT=$(git rev-list --count "$MERGE_SHA^1..$MERGE_SHA" 2>/dev/null || echo "1")
         MAX_TURNS=$((COMMIT_COUNT * 30))
