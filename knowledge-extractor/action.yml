@@ -40,93 +40,37 @@ runs:
       shell: bash
       run: npm install -g @anthropic-ai/claude-code
 
-    - name: Process each commit
+    - name: Extract Knowledge
       shell: bash
       env:
         ANTHROPIC_API_KEY: ${{ inputs.anthropic_api_key }}
         GITHUB_TOKEN: ${{ inputs.github_token }}
         MERGE_SHA: ${{ github.event.pull_request.merge_commit_sha }}
         PR_NUMBER: ${{ github.event.pull_request.number }}
-        PR_TITLE: ${{ github.event.pull_request.title }}
         REPO: ${{ github.repository }}
       run: |
-        echo "Fetching PR context..."
-        PR_BODY=$(gh pr view "$PR_NUMBER" --json body --jq '.body // ""')
-        PR_COMMENTS=$(gh pr view "$PR_NUMBER" --json comments --jq '[.comments[].body] | join("\n---\n")' | head -c 5000)
+        # Calculate max turns based on commit count
+        COMMIT_COUNT=$(git rev-list --count "$MERGE_SHA^1..$MERGE_SHA" 2>/dev/null || echo "1")
+        MAX_TURNS=$((COMMIT_COUNT * 30))
 
-        COMMITS=$(git log "$MERGE_SHA^1..$MERGE_SHA" --format="%H" --reverse 2>/dev/null || echo "$MERGE_SHA")
-        TOTAL=$(echo "$COMMITS" | wc -l | tr -d ' ')
-        CURRENT=0
+        # Ensure minimum turns
+        if [ "$MAX_TURNS" -lt 30 ]; then
+          MAX_TURNS=30
+        fi
 
-        for SHA in $COMMITS; do
-          CURRENT=$((CURRENT + 1))
-          COMMIT_MSG="$(git log -1 --format='%s' "$SHA")"
-          SHORT_SHA="${SHA:0:7}"
-          COMMIT_MSG_SHORT=$(echo "$COMMIT_MSG" | head -n1)
-          REPO_SHORT=$(echo "$REPO" | cut -d'/' -f2)
-          echo "=========================================="
-          echo "Processing commit $CURRENT/$TOTAL: $SHA"
-          echo "Message: $COMMIT_MSG"
-          echo "=========================================="
+        PR_URL="https://github.com/$REPO/pull/$PR_NUMBER"
 
-          PROMPT="Commit $SHA has been merged in PR #$PR_NUMBER.
+        echo "=========================================="
+        echo "Extracting knowledge from PR: $PR_URL"
+        echo "Commits: $COMMIT_COUNT"
+        echo "Max turns: $MAX_TURNS"
+        echo "=========================================="
 
-        Commit Info:
-        - SHA: $SHA
-        - Message: $COMMIT_MSG
-        - Repo: $REPO
-        - PR: #$PR_NUMBER - $PR_TITLE
+        echo "/extract-knowledge --pr $PR_URL" | claude --print \
+          --model claude-sonnet-4-20250514 \
+          --max-turns $MAX_TURNS \
+          --add-dir .claude \
+          --add-dir knowledge-graph \
+          --allowedTools "Write,Bash,Edit,Read,Grep,Glob,Skill,Task"
 
-        PR Description:
-        $PR_BODY
-
-        PR Discussion:
-        $PR_COMMENTS
-
-        Instructions:
-        Read and follow the rules in knowledge-graph/.claude/CLAUDE.md.
-
-        Step 1: Analyze Commit
-        Run: git show $SHA
-        to see the changes in this commit.
-
-        Step 2: Search Existing Knowledge
-        Follow the search algorithm in knowledge-graph/_meta/SEARCH.md:
-        1. Read _meta/SEARCH.md first
-        2. Use hierarchical module search, keyword search, pattern/tag search
-        3. Score and rank results, select top 7 files
-        - DO NOT read all knowledge files!
-
-        Step 3: Extract Knowledge
-        1. Extract knowledge (concepts, conventions, decisions, pitfalls)
-        2. Decide: update existing file or create new
-        3. Add [[wikilinks]] to related knowledge
-        4. Update ALL _meta/ indices:
-           - tag-index.json
-           - file-pattern-index.json
-           - link-graph.json
-           - module-index.json (directory → knowledge)
-           - keyword-index.json (key terms from content)
-           - repo-index.json (repo → knowledge, "*" for common)
-
-        Step 4: Commit to knowledge-graph
-        After processing:
-        1. cd knowledge-graph
-        2. git add .
-        3. git commit -m 'docs($REPO_SHORT): $SHORT_SHA - $COMMIT_MSG_SHORT'
-        4. git push
-
-        Constraints:
-        - Each knowledge file: max 500 lines
-        - Load max 7 knowledge files total
-        - Always update indices after changes
-        - If no knowledge worth extracting, skip and say so"
-
-          echo "$PROMPT" | claude --print --model claude-opus-4-5-20251101 --max-turns 30 \
-            --add-dir knowledge-graph \
-            --allowedTools "Write,Bash,Edit"
-
-          echo "Completed commit $CURRENT/$TOTAL"
-        done
-
-        echo "All commits processed!"
+        echo "Knowledge extraction completed!"
