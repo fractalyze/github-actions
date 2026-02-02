@@ -29,6 +29,13 @@ runs:
         path: knowledge-graph
         token: ${{ inputs.knowledge_repo_token }}
 
+    - name: Checkout .claude repo
+      uses: actions/checkout@v4
+      with:
+        repository: fractalyze/.claude
+        path: .claude
+        token: ${{ inputs.knowledge_repo_token }}
+
     - name: Configure git for knowledge-graph
       shell: bash
       run: |
