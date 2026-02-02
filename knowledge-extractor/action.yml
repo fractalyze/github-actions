@@ -12,6 +12,9 @@ inputs:
   knowledge_repo_token:
     description: 'GitHub PAT with write access to knowledge-graph repo'
     required: true
+  claude_repo_token:
+    description: 'GitHub PAT with read access to .claude repo'
+    required: true
 
 runs:
   using: 'composite'
@@ -34,7 +37,7 @@ runs:
       with:
         repository: fractalyze/.claude
         path: .claude
-        token: ${{ inputs.knowledge_repo_token }}
+        token: ${{ inputs.claude_repo_token }}
 
     - name: Configure git for knowledge-graph
       shell: bash
