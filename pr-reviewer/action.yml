@@ -62,7 +62,7 @@ runs:
         PR_NUMBER="${{ github.event.pull_request.number || github.event.issue.number }}"
         PR_URL="https://github.com/${{ github.repository }}/pull/${PR_NUMBER}"
 
-        echo "/pr-review $PR_URL" | claude --print \
+        echo "/review-pr $PR_URL" | claude --print \
           --model claude-sonnet-4-20250514 \
           --max-turns 50 \
           --add-dir .claude \
