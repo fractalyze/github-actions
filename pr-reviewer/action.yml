@@ -24,6 +24,17 @@ runs:
       with:
         fetch-depth: 0
 
+    - name: Checkout PR branch (for /review comment)
+      if: github.event_name == 'issue_comment'
+      shell: bash
+      env:
+        GITHUB_TOKEN: ${{ inputs.github_token }}
+      run: |
+        PR_NUMBER="${{ github.event.issue.number }}"
+        PR_HEAD=$(gh pr view $PR_NUMBER --json headRefName -q '.headRefName')
+        git fetch origin $PR_HEAD
+        git checkout $PR_HEAD
+
     - name: Checkout knowledge-graph repo
       uses: actions/checkout@v4
       with:
@@ -48,7 +59,8 @@ runs:
         ANTHROPIC_API_KEY: ${{ inputs.anthropic_api_key }}
         GITHUB_TOKEN: ${{ inputs.github_token }}
       run: |
-        PR_URL="https://github.com/${{ github.repository }}/pull/${{ github.event.pull_request.number }}"
+        PR_NUMBER="${{ github.event.pull_request.number || github.event.issue.number }}"
+        PR_URL="https://github.com/${{ github.repository }}/pull/${PR_NUMBER}"
 
         echo "/pr-review $PR_URL" | claude --print \
           --model claude-sonnet-4-20250514 \
