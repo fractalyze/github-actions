@@ -70,4 +70,6 @@ runs:
           --add-dir knowledge-graph \
           --allowedTools "Read,Grep,Glob,Bash,Task,Skill"
 
-        echo "PR review completed!"
+        echo "========== Findings JSON =========="
+        cat /tmp/pr-review-findings.json 2>/dev/null || echo "(not found)"
+        echo "==================================="
