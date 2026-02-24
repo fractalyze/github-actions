@@ -8,8 +8,16 @@ inputs:
   github_token:
     description: 'GitHub token for API access'
     required: true
+  scope_mode:
+    description: 'Scope validation mode: "manual" (validate against list) or "auto" (derive from file paths)'
+    required: false
+    default: 'manual'
   scopes:
-    description: 'Space-separated list of allowed scopes (empty = skip scope validation)'
+    description: 'Space-separated list of allowed scopes (manual mode only; empty = skip scope validation)'
+    required: false
+    default: ''
+  scope_prefixes:
+    description: 'Space-separated directory prefixes to strip for auto scope derivation (e.g., "zkx xla")'
     required: false
     default: ''
 
@@ -20,7 +28,9 @@ runs:
       shell: bash
       env:
         GH_TOKEN: ${{ inputs.github_token }}
+        INPUT_SCOPE_MODE: ${{ inputs.scope_mode }}
         INPUT_SCOPES: ${{ inputs.scopes }}
+        INPUT_SCOPE_PREFIXES: ${{ inputs.scope_prefixes }}
         PR_TITLE: ${{ github.event.pull_request.title }}
         PR_NUMBER: ${{ github.event.pull_request.number }}
         REPO: ${{ github.repository }}
