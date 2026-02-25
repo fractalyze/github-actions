@@ -96,10 +96,15 @@ derive_scope() {
     done
     [[ -z "$stripped" ]] && continue
 
-    # Extract directory components (skip files at prefix root)
+    # Extract directory components
     local dir
     dir="$(dirname "$stripped")"
-    [[ "$dir" == "." ]] && continue
+    if [[ "$dir" == "." ]]; then
+      # Files at prefix root have no directory — include as empty string
+      # so they participate in the fold (breaking any common prefix)
+      dirs+=("")
+      continue
+    fi
 
     # Take up to 2 directory levels
     IFS='/' read -ra parts <<< "$dir"
