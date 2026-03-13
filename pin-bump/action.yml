@@ -20,6 +20,13 @@ inputs:
   github_token:
     description: 'GitHub PAT with repo scope for push and PR creation'
     required: true
+  transitive_pins:
+    description: |
+      Optional transitive dependency sync config. Each line specifies a
+      dependency to extract from the upstream repo's pin files and sync locally.
+      Format per line: dep_repo|upstream_pin_path|local_pin_path|var_prefix
+    required: false
+    default: ''
 
 runs:
   using: 'composite'
@@ -44,14 +51,16 @@ runs:
         echo "sha256=${SHA256}" >> "$GITHUB_OUTPUT"
         echo "Computed SHA256: ${SHA256}"
 
-    - name: Create branch and update pin file
+    - name: Create branch and update pin files
       shell: bash
       env:
+        GH_TOKEN: ${{ inputs.github_token }}
         UPSTREAM_REPO: ${{ inputs.upstream_repo }}
         UPSTREAM_COMMIT: ${{ inputs.upstream_commit }}
         PIN_FILE: ${{ inputs.pin_file }}
         VAR_PREFIX: ${{ inputs.var_prefix }}
         NEW_SHA256: ${{ steps.sha256.outputs.sha256 }}
+        TRANSITIVE_PINS: ${{ inputs.transitive_pins }}
       run: |
         BRANCH="chore/bump-${UPSTREAM_REPO}"
         SHORT_HASH="${UPSTREAM_COMMIT:0:12}"
@@ -62,11 +71,39 @@ runs:
         # Create or reset the branch from current HEAD
         git checkout -B "${BRANCH}"
 
-        # Update commit hash and SHA256 in the pin file
+        # Update primary pin file
         sed -i "s/${VAR_PREFIX}_COMMIT = \"[a-f0-9]*\"/${VAR_PREFIX}_COMMIT = \"${UPSTREAM_COMMIT}\"/" "${PIN_FILE}"
         sed -i "s/${VAR_PREFIX}_SHA256 = \"[a-f0-9]*\"/${VAR_PREFIX}_SHA256 = \"${NEW_SHA256}\"/" "${PIN_FILE}"
-
         git add "${PIN_FILE}"
+
+        # Sync transitive dependencies from upstream's pin files
+        if [ -n "$TRANSITIVE_PINS" ]; then
+          while IFS='|' read -r DEP_REPO UPSTREAM_PIN_PATH LOCAL_PIN_PATH DEP_VAR_PREFIX; do
+            [ -z "$DEP_REPO" ] && continue
+
+            # Fetch upstream's pin file to extract the dep's commit hash
+            UPSTREAM_PIN_CONTENT=$(curl -fsSL -H "Authorization: token ${GH_TOKEN}" \
+              "https://raw.githubusercontent.com/fractalyze/${UPSTREAM_REPO}/${UPSTREAM_COMMIT}/${UPSTREAM_PIN_PATH}")
+
+            DEP_COMMIT=$(echo "$UPSTREAM_PIN_CONTENT" | grep "${DEP_VAR_PREFIX}_COMMIT" | sed 's/.*"\([a-f0-9]*\)".*/\1/')
+            if [ -z "$DEP_COMMIT" ]; then
+              echo "::error::Failed to extract ${DEP_VAR_PREFIX}_COMMIT from ${UPSTREAM_REPO}/${UPSTREAM_PIN_PATH}"
+              exit 1
+            fi
+
+            # Compute SHA256 for the dep's tarball
+            DEP_SHA256=$(curl -fsSL -H "Authorization: token ${GH_TOKEN}" \
+              "https://github.com/fractalyze/${DEP_REPO}/archive/${DEP_COMMIT}.tar.gz" | sha256sum | cut -d' ' -f1)
+
+            # Update local pin file
+            sed -i "s/${DEP_VAR_PREFIX}_COMMIT = \"[a-f0-9]*\"/${DEP_VAR_PREFIX}_COMMIT = \"${DEP_COMMIT}\"/" "${LOCAL_PIN_PATH}"
+            sed -i "s/${DEP_VAR_PREFIX}_SHA256 = \"[a-f0-9]*\"/${DEP_VAR_PREFIX}_SHA256 = \"${DEP_SHA256}\"/" "${LOCAL_PIN_PATH}"
+            git add "${LOCAL_PIN_PATH}"
+
+            echo "Synced ${DEP_REPO} to ${DEP_COMMIT:0:12}"
+          done <<< "$TRANSITIVE_PINS"
+        fi
+
         git commit -m "build: bump ${UPSTREAM_REPO} to ${SHORT_HASH}"
         git push --force origin "${BRANCH}"
 
