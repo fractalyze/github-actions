@@ -51,6 +51,13 @@ runs:
         echo "sha256=${SHA256}" >> "$GITHUB_OUTPUT"
         echo "Computed SHA256: ${SHA256}"
 
+    - name: Configure git remote with PAT
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.github_token }}
+      run: |
+        git remote set-url origin "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+
     - name: Create branch and update pin files
       shell: bash
       env:
