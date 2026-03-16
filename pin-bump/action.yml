@@ -96,7 +96,7 @@ runs:
             UPSTREAM_PIN_CONTENT=$(curl -fsSL -u "x-access-token:${GH_TOKEN}" \
               "https://raw.githubusercontent.com/fractalyze/${UPSTREAM_REPO}/${UPSTREAM_COMMIT}/${UPSTREAM_PIN_PATH}")
 
-            DEP_COMMIT=$(echo "$UPSTREAM_PIN_CONTENT" | grep "${DEP_VAR_PREFIX}_COMMIT" | sed 's/.*"\([a-f0-9]*\)".*/\1/')
+            DEP_COMMIT=$(echo "$UPSTREAM_PIN_CONTENT" | grep "${DEP_VAR_PREFIX}_COMMIT = " | head -1 | sed 's/.*"\([a-f0-9]*\)".*/\1/')
             if [ -z "$DEP_COMMIT" ]; then
               echo "::error::Failed to extract ${DEP_VAR_PREFIX}_COMMIT from ${UPSTREAM_REPO}/${UPSTREAM_PIN_PATH}"
               exit 1
