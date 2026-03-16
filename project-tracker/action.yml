@@ -1,5 +1,5 @@
 name: 'Project Tracker'
-description: 'Auto-add PRs to fractalyze Roadmap project and set Sprint/Status fields'
+description: 'Auto-add PRs to fractalyze Roadmap project'
 author: 'fractalyze'
 
 inputs:
@@ -17,39 +17,12 @@ runs:
       run: |
         set -euo pipefail
 
-        PROJECT_ID="PVT_kwDODoEWqs4BRs78"
         PROJECT_NUM=6
         ORG="fractalyze"
 
-        # Field IDs
-        STATUS_FIELD="PVTSSF_lADODoEWqs4BRs78zg_c_rs"
-        SPRINT_FIELD="PVTSSF_lADODoEWqs4BRs78zg_dCFQ"
-        LEVEL_FIELD="PVTSSF_lADODoEWqs4BRs78zg_c_sQ"
-
-        # Status option IDs
-        STATUS_DRAFT="531eaf9f"
-        STATUS_IN_REVIEW="fb6b2da5"
-        STATUS_MERGED="a9e5cb8f"
-        STATUS_CLOSED="8990ac4a"
-
-        # Level option ID
-        LEVEL_WEEKLY_TASK="6ff99d16"
-
-        # Sprint option IDs (week number -> option ID)
-        declare -A SPRINT_OPTIONS
-        SPRINT_OPTIONS=(
-          [W09]="2ce60dbf" [W10]="62c5065c" [W11]="152e0b0d"
-          [W12]="08362f51" [W13]="8f35d6c5" [W14]="ff5b6559"
-          [W15]="80afe86d" [W16]="51cca2e7" [W17]="3f28c3c8"
-        )
-
-        # Determine PR URL and state
         EVENT="${{ github.event_name }}"
         if [ "$EVENT" = "pull_request" ] || [ "$EVENT" = "pull_request_target" ]; then
           PR_URL="${{ github.event.pull_request.html_url }}"
-          PR_DRAFT="${{ github.event.pull_request.draft }}"
-          PR_MERGED="${{ github.event.pull_request.merged }}"
-          PR_STATE="${{ github.event.pull_request.state }}"
         else
           echo "Unsupported event: $EVENT"
           exit 0
@@ -57,61 +30,10 @@ runs:
 
         echo "PR: $PR_URL"
 
-        # Determine status
-        if [ "$PR_MERGED" = "true" ]; then
-          STATUS_OPT="$STATUS_MERGED"
-          STATUS_NAME="Merged"
-        elif [ "$PR_STATE" = "closed" ]; then
-          STATUS_OPT="$STATUS_CLOSED"
-          STATUS_NAME="Closed"
-        elif [ "$PR_DRAFT" = "true" ]; then
-          STATUS_OPT="$STATUS_DRAFT"
-          STATUS_NAME="Draft"
-        else
-          STATUS_OPT="$STATUS_IN_REVIEW"
-          STATUS_NAME="In Review"
-        fi
-
-        echo "Status: $STATUS_NAME"
-
-        # Calculate current ISO week
-        CURRENT_WEEK="W$(date -u +%V)"
-        echo "Current week: $CURRENT_WEEK"
-
-        SPRINT_OPT="${SPRINT_OPTIONS[$CURRENT_WEEK]:-}"
-        if [ -z "$SPRINT_OPT" ]; then
-          echo "Warning: No Sprint option for $CURRENT_WEEK, skipping Sprint assignment"
-        fi
-
-        # Add PR to project
-        ITEM_ID=$(gh project item-add "$PROJECT_NUM" \
+        # Add PR to project (idempotent — returns existing item if already added)
+        gh project item-add "$PROJECT_NUM" \
           --owner "$ORG" \
           --url "$PR_URL" \
-          --format json | python3 -c "import json,sys; print(json.load(sys.stdin)['id'])")
+          --format json > /dev/null
 
-        echo "Item ID: $ITEM_ID"
-
-        # Set Status
-        gh project item-edit \
-          --project-id "$PROJECT_ID" \
-          --id "$ITEM_ID" \
-          --field-id "$STATUS_FIELD" \
-          --single-select-option-id "$STATUS_OPT"
-
-        # Set Level = Weekly Task
-        gh project item-edit \
-          --project-id "$PROJECT_ID" \
-          --id "$ITEM_ID" \
-          --field-id "$LEVEL_FIELD" \
-          --single-select-option-id "$LEVEL_WEEKLY_TASK"
-
-        # Set Sprint (if option exists)
-        if [ -n "$SPRINT_OPT" ]; then
-          gh project item-edit \
-            --project-id "$PROJECT_ID" \
-            --id "$ITEM_ID" \
-            --field-id "$SPRINT_FIELD" \
-            --single-select-option-id "$SPRINT_OPT"
-        fi
-
-        echo "Done: PR tracked as $STATUS_NAME in $CURRENT_WEEK"
+        echo "Done: PR added to project"
