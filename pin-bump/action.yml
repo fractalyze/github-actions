@@ -148,5 +148,6 @@ runs:
             -X PATCH -f title="${TITLE}" -f body="${BODY}"
         else
           echo "Creating new PR"
-          gh pr create --title "${TITLE}" --body "${BODY}" --head "${BRANCH}" --base main
+          gh pr create --title "${TITLE}" --body "${BODY}" --head "${BRANCH}" --base main \
+            --reviewer chokobole,jeong0982,batzor
         fi
