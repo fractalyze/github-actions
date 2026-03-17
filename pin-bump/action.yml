@@ -144,7 +144,8 @@ runs:
 
         if [ -n "$EXISTING_PR" ]; then
           echo "Updating existing PR #${EXISTING_PR}"
-          gh pr edit "$EXISTING_PR" --title "${TITLE}" --body "${BODY}"
+          gh api "repos/${GITHUB_REPOSITORY}/pulls/${EXISTING_PR}" \
+            -X PATCH -f title="${TITLE}" -f body="${BODY}"
         else
           echo "Creating new PR"
           gh pr create --title "${TITLE}" --body "${BODY}" --head "${BRANCH}" --base main
