@@ -1,0 +1,100 @@
+# Copyright 2026 Fractalyze Inc. All rights reserved.
+
+name: 'Pip Bump'
+description: 'Bump pip package versions in requirements.in and regenerate lock file'
+author: 'fractalyze'
+
+inputs:
+  upstream_repo:
+    description: 'Upstream repository name (e.g., "jax")'
+    required: true
+  version:
+    description: 'New version string (e.g., "0.0.5.dev20260326140000")'
+    required: true
+  upstream_commit:
+    description: 'Upstream commit hash (used in PR body link)'
+    required: true
+  packages:
+    description: 'Space-separated package names to bump (e.g., "jax jaxlib")'
+    required: true
+  github_token:
+    description: 'GitHub PAT with repo scope for push and PR creation'
+    required: true
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Configure git remote with PAT
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.github_token }}
+      run: |
+        git remote set-url origin "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+
+    - name: Update requirements.in
+      shell: bash
+      env:
+        VERSION: ${{ inputs.version }}
+        PACKAGES: ${{ inputs.packages }}
+      run: |
+        for pkg in $PACKAGES; do
+          sed -i "s/^${pkg}==.*/${pkg}==${VERSION}/" requirements.in
+        done
+        echo "Updated requirements.in:"
+        cat requirements.in
+
+    - name: Regenerate lock file
+      shell: bash
+      run: bazel run //:requirements.update
+
+    - name: Create branch and commit
+      id: update
+      shell: bash
+      env:
+        UPSTREAM_REPO: ${{ inputs.upstream_repo }}
+        VERSION: ${{ inputs.version }}
+        PACKAGES: ${{ inputs.packages }}
+      run: |
+        BRANCH="chore/bump-${UPSTREAM_REPO}"
+
+        git config user.name "github-actions[bot]"
+        git config user.email "github-actions[bot]@users.noreply.github.com"
+        git checkout -B "${BRANCH}"
+        git add requirements.in requirements_lock_3_11.txt
+
+        if git diff --cached --quiet; then
+          echo "No changes to commit — already up to date."
+          echo "has_changes=false" >> "$GITHUB_OUTPUT"
+          exit 0
+        fi
+
+        echo "has_changes=true" >> "$GITHUB_OUTPUT"
+        git commit -m "build: bump ${PACKAGES// /\/} to ${VERSION}"
+        git push --force origin "${BRANCH}"
+
+    - name: Create or update PR
+      if: steps.update.outputs.has_changes == 'true'
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.github_token }}
+        UPSTREAM_REPO: ${{ inputs.upstream_repo }}
+        UPSTREAM_COMMIT: ${{ inputs.upstream_commit }}
+        VERSION: ${{ inputs.version }}
+        PACKAGES: ${{ inputs.packages }}
+      run: |
+        BRANCH="chore/bump-${UPSTREAM_REPO}"
+        TITLE="build: bump ${PACKAGES// /\/} to ${VERSION}"
+        SHORT_HASH="${UPSTREAM_COMMIT:0:12}"
+        BODY="Automated pip bump triggered by [\`${UPSTREAM_REPO}@${SHORT_HASH}\`](https://github.com/fractalyze/${UPSTREAM_REPO}/commit/${UPSTREAM_COMMIT})."
+
+        EXISTING_PR=$(gh pr list --head "${BRANCH}" --state open --json number --jq '.[0].number' 2>/dev/null || true)
+
+        if [ -n "$EXISTING_PR" ]; then
+          echo "Updating existing PR #${EXISTING_PR}"
+          gh api "repos/${GITHUB_REPOSITORY}/pulls/${EXISTING_PR}" \
+            -X PATCH -f title="${TITLE}" -f body="${BODY}"
+        else
+          echo "Creating new PR"
+          gh pr create --title "${TITLE}" --body "${BODY}" --head "${BRANCH}" --base main \
+            --reviewer chokobole
+        fi
