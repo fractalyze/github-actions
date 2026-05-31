@@ -16,7 +16,7 @@
 # staged files.
 set -euo pipefail
 
-fractal_lint_version="${INPUT_FRACTAL_LINT_VERSION:-v0.5.0}"
+fractal_lint_version="${INPUT_FRACTAL_LINT_VERSION:-v0.6.0}"
 base_sha="${INPUT_BASE_SHA:?INPUT_BASE_SHA is required for hybrid mode}"
 head_sha="${INPUT_HEAD_SHA:?INPUT_HEAD_SHA is required for hybrid mode}"
 
