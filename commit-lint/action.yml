@@ -27,7 +27,7 @@ inputs:
   fractal_lint_version:
     description: 'Git ref of fractalyze/fractal-lint to install for hybrid mode'
     required: false
-    default: 'v0.5.0'
+    default: 'v0.6.0'
 
 runs:
   using: 'composite'
