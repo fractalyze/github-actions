@@ -9,7 +9,11 @@ inputs:
     description: 'GitHub token for API access'
     required: true
   scope_mode:
-    description: 'Scope validation mode: "manual" (validate against list) or "auto" (derive from file paths)'
+    description: >-
+      Scope validation mode: "manual" (validate against a fixed list), "auto"
+      (derive from changed-file paths), or "hybrid" (run fractal-commit-lint
+      against the repo's .fractal-commit-lint.toml: curated [scopes] aliases
+      plus a directory fallback under roots, with scope-path checked per commit)
     required: false
     default: 'manual'
   scopes:
@@ -20,11 +24,19 @@ inputs:
     description: 'Space-separated directory prefixes to strip for auto scope derivation (e.g., "zkx xla")'
     required: false
     default: ''
+  fractal_lint_version:
+    description: 'Git ref of fractalyze/fractal-lint to install for hybrid mode'
+    required: false
+    default: 'v0.5.0'
 
 runs:
   using: 'composite'
   steps:
+    # auto / manual: unchanged path. validate.sh is byte-for-byte identical to
+    # earlier releases, so existing consumers (scope_mode auto/manual) are
+    # unaffected; this step simply does not run in hybrid mode.
     - name: Validate PR title and commit messages
+      if: inputs.scope_mode != 'hybrid'
       shell: bash
       env:
         GH_TOKEN: ${{ inputs.github_token }}
@@ -35,3 +47,20 @@ runs:
         PR_NUMBER: ${{ github.event.pull_request.number }}
         REPO: ${{ github.repository }}
       run: bash "${{ github.action_path }}/scripts/validate.sh"
+
+    # hybrid: needs a local checkout so fractal-commit-lint can read
+    # .fractal-commit-lint.toml and each commit's staged files for scope-path.
+    - name: Checkout PR head (hybrid)
+      if: inputs.scope_mode == 'hybrid'
+      uses: actions/checkout@v4
+      with:
+        ref: ${{ github.event.pull_request.head.sha }}
+        fetch-depth: 0
+    - name: Validate PR title and commit messages (hybrid)
+      if: inputs.scope_mode == 'hybrid'
+      shell: bash
+      env:
+        INPUT_FRACTAL_LINT_VERSION: ${{ inputs.fractal_lint_version }}
+        INPUT_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        INPUT_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+      run: bash "${{ github.action_path }}/scripts/validate_hybrid.sh"
