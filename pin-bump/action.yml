@@ -45,8 +45,10 @@ runs:
       run: |
         TARBALL_URL="https://github.com/fractalyze/${UPSTREAM_REPO}/archive/${UPSTREAM_COMMIT}.tar.gz"
         echo "Downloading tarball: ${TARBALL_URL}"
+        # --location-trusted: github.com archive redirects to codeload, and curl
+        # drops -u creds on a cross-host redirect, 404ing on private repos.
 
-        SHA256=$(curl -fsSL -u "x-access-token:${GH_TOKEN}" "${TARBALL_URL}" | sha256sum | cut -d' ' -f1)
+        SHA256=$(curl -fsS --location-trusted -u "x-access-token:${GH_TOKEN}" "${TARBALL_URL}" | sha256sum | cut -d' ' -f1)
         if [ -z "$SHA256" ]; then
           echo "::error::Failed to compute SHA256 for ${TARBALL_URL}"
           exit 1
@@ -93,7 +95,9 @@ runs:
           while IFS='|' read -r DEP_REPO UPSTREAM_PIN_PATH LOCAL_PIN_PATH DEP_VAR_PREFIX; do
             [ -z "$DEP_REPO" ] && continue
 
-            # Fetch upstream's pin file to extract the dep's commit hash
+            # Fetch upstream's pin file to extract the dep's commit hash.
+            # Plain -L here: raw.githubusercontent.com does not cross-host
+            # redirect, so don't risk forwarding creds with --location-trusted.
             UPSTREAM_PIN_CONTENT=$(curl -fsSL -u "x-access-token:${GH_TOKEN}" \
               "https://raw.githubusercontent.com/fractalyze/${UPSTREAM_REPO}/${UPSTREAM_COMMIT}/${UPSTREAM_PIN_PATH}")
 
@@ -104,7 +108,7 @@ runs:
             fi
 
             # Compute SHA256 for the dep's tarball
-            DEP_SHA256=$(curl -fsSL -u "x-access-token:${GH_TOKEN}" \
+            DEP_SHA256=$(curl -fsS --location-trusted -u "x-access-token:${GH_TOKEN}" \
               "https://github.com/fractalyze/${DEP_REPO}/archive/${DEP_COMMIT}.tar.gz" | sha256sum | cut -d' ' -f1)
 
             # Update local pin file
