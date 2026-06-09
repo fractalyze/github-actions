@@ -95,8 +95,10 @@ runs:
           while IFS='|' read -r DEP_REPO UPSTREAM_PIN_PATH LOCAL_PIN_PATH DEP_VAR_PREFIX; do
             [ -z "$DEP_REPO" ] && continue
 
-            # Fetch upstream's pin file to extract the dep's commit hash
-            UPSTREAM_PIN_CONTENT=$(curl -fsS --location-trusted -u "x-access-token:${GH_TOKEN}" \
+            # Fetch upstream's pin file to extract the dep's commit hash.
+            # Plain -L here: raw.githubusercontent.com does not cross-host
+            # redirect, so don't risk forwarding creds with --location-trusted.
+            UPSTREAM_PIN_CONTENT=$(curl -fsSL -u "x-access-token:${GH_TOKEN}" \
               "https://raw.githubusercontent.com/fractalyze/${UPSTREAM_REPO}/${UPSTREAM_COMMIT}/${UPSTREAM_PIN_PATH}")
 
             DEP_COMMIT=$(echo "$UPSTREAM_PIN_CONTENT" | grep "${DEP_VAR_PREFIX}_COMMIT = " | head -1 | sed 's/.*"\([a-f0-9]*\)".*/\1/')
