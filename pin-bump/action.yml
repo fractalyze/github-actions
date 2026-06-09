@@ -152,6 +152,10 @@ runs:
             -X PATCH -f title="${TITLE}" -f body="${BODY}"
         else
           echo "Creating new PR"
+          # Draft so the consumer repo's heavy build CI (gated on
+          # pull_request.draft == false) stays idle while bumps batch onto this
+          # branch; a maintainer marks it ready (or dispatches CI) to validate.
           gh pr create --title "${TITLE}" --body "${BODY}" --head "${BRANCH}" --base main \
+            --draft \
             --reviewer chokobole
         fi
