@@ -158,9 +158,14 @@ runs:
           gh api "repos/${GITHUB_REPOSITORY}/pulls/${EXISTING_PR}" \
             -X PATCH -f title="${TITLE}" -f body="${BODY}"
         else
-          DRAFT_FLAG=""
-          [ "${DRAFT}" = "true" ] && DRAFT_FLAG="--draft"
-          echo "Creating new PR ${DRAFT_FLAG:+(draft)}"
+          # ${DRAFT,,}: GitHub passes booleans with varying case (True/TRUE).
+          PR_ARGS=()
+          if [ "${DRAFT,,}" = "true" ]; then
+            PR_ARGS+=("--draft")
+            echo "Creating new draft PR"
+          else
+            echo "Creating new PR"
+          fi
           gh pr create --title "${TITLE}" --body "${BODY}" --head "${BRANCH}" --base main \
-            --reviewer chokobole ${DRAFT_FLAG}
+            --reviewer chokobole "${PR_ARGS[@]}"
         fi
