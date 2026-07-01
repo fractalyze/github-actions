@@ -31,6 +31,10 @@ inputs:
       Format per line: dep_repo|upstream_pin_path|local_pin_path|var_prefix
     required: false
     default: ''
+  draft:
+    description: 'Open the bump PR as a draft, to be manually marked ready'
+    required: false
+    default: 'true'
 
 runs:
   using: 'composite'
@@ -137,6 +141,7 @@ runs:
         GH_TOKEN: ${{ inputs.github_token }}
         UPSTREAM_REPO: ${{ inputs.upstream_repo }}
         UPSTREAM_COMMIT: ${{ inputs.upstream_commit }}
+        DRAFT: ${{ inputs.draft }}
       run: |
         BRANCH="chore/bump-${UPSTREAM_REPO}"
         SHORT_HASH="${UPSTREAM_COMMIT:0:12}"
@@ -147,11 +152,20 @@ runs:
         EXISTING_PR=$(gh pr list --head "${BRANCH}" --state open --json number --jq '.[0].number' 2>/dev/null || true)
 
         if [ -n "$EXISTING_PR" ]; then
+          # --draft only applies at creation; a re-bump leaves an
+          # already-ready PR ready (REST PATCH cannot toggle draft anyway).
           echo "Updating existing PR #${EXISTING_PR}"
           gh api "repos/${GITHUB_REPOSITORY}/pulls/${EXISTING_PR}" \
             -X PATCH -f title="${TITLE}" -f body="${BODY}"
         else
-          echo "Creating new PR"
+          # ${DRAFT,,}: GitHub passes booleans with varying case (True/TRUE).
+          PR_ARGS=()
+          if [ "${DRAFT,,}" = "true" ]; then
+            PR_ARGS+=("--draft")
+            echo "Creating new draft PR"
+          else
+            echo "Creating new PR"
+          fi
           gh pr create --title "${TITLE}" --body "${BODY}" --head "${BRANCH}" --base main \
-            --reviewer chokobole
+            --reviewer chokobole "${PR_ARGS[@]}"
         fi
