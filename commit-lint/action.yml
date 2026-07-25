@@ -25,9 +25,12 @@ inputs:
     required: false
     default: ''
   fractal_lint_version:
-    description: 'Git ref of fractalyze/fractal-lint to install for hybrid mode'
+    description: >-
+      Git ref of fractalyze/fractal-lint to install for hybrid mode. Needs
+      v0.8.0 or newer, the first with the --header-only flag PR-title linting
+      requires.
     required: false
-    default: 'v0.6.0'
+    default: 'v0.8.0'
 
 runs:
   using: 'composite'
@@ -63,4 +66,5 @@ runs:
         INPUT_FRACTAL_LINT_VERSION: ${{ inputs.fractal_lint_version }}
         INPUT_BASE_SHA: ${{ github.event.pull_request.base.sha }}
         INPUT_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        PR_TITLE: ${{ github.event.pull_request.title }}
       run: bash "${{ github.action_path }}/scripts/validate_hybrid.sh"
