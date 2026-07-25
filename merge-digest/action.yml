@@ -1,0 +1,77 @@
+# Copyright 2026 Fractalyze Inc. All rights reserved.
+
+name: 'Merge Digest'
+description: 'Post a digest of pull requests merged across the org to a Slack DM or channel'
+author: 'fractalyze'
+
+inputs:
+  slack_bot_token:
+    description: 'Slack bot token (xoxb-) with chat:write and im:write scopes'
+    required: true
+  slack_target:
+    description: 'Slack user ID (U…) to DM, or channel ID (C…) to post in'
+    required: true
+  github_token:
+    description: >-
+      Token with read access to every repo in the org. The default
+      secrets.GITHUB_TOKEN is scoped to one repository and will only ever see
+      that repo, so pass a PAT or GitHub App token.
+    required: true
+  org:
+    description: 'GitHub org to scan (defaults to the org running the workflow)'
+    required: false
+    default: ${{ github.repository_owner }}
+  since_hours:
+    description: 'Look back this many hours. Match it to the cron interval.'
+    required: false
+    default: '24'
+  mode:
+    description: '`list` for a per-repo listing (no LLM), `summarize` to add a Claude briefing'
+    required: false
+    default: 'list'
+  exclude_authors:
+    description: >-
+      Comma-separated logins to leave out, for machine users that open release or
+      dependency-bump PRs. Authors ending in [bot] are always excluded.
+    required: false
+    default: ''
+  anthropic_api_key:
+    description: 'Anthropic API key. Required when mode is `summarize`.'
+    required: false
+    default: ''
+  model:
+    description: 'Claude model for the summary'
+    required: false
+    default: 'claude-opus-5'
+  effort:
+    description: 'Claude effort level — low keeps a routine digest cheap'
+    required: false
+    default: 'low'
+  skip_if_empty:
+    description: 'Post nothing when no PRs merged in the window'
+    required: false
+    default: 'true'
+  dry_run:
+    description: 'Print the Slack blocks to the log instead of posting'
+    required: false
+    default: 'false'
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Post merge digest
+      shell: bash
+      env:
+        GITHUB_TOKEN: ${{ inputs.github_token }}
+        SLACK_BOT_TOKEN: ${{ inputs.slack_bot_token }}
+        SLACK_TARGET: ${{ inputs.slack_target }}
+        ANTHROPIC_API_KEY: ${{ inputs.anthropic_api_key }}
+        DIGEST_ORG: ${{ inputs.org }}
+        DIGEST_SINCE_HOURS: ${{ inputs.since_hours }}
+        DIGEST_MODE: ${{ inputs.mode }}
+        DIGEST_EXCLUDE_AUTHORS: ${{ inputs.exclude_authors }}
+        DIGEST_MODEL: ${{ inputs.model }}
+        DIGEST_EFFORT: ${{ inputs.effort }}
+        DIGEST_SKIP_IF_EMPTY: ${{ inputs.skip_if_empty }}
+        DIGEST_DRY_RUN: ${{ inputs.dry_run }}
+      run: python3 "${{ github.action_path }}/digest.py"

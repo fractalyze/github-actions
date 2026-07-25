@@ -1,0 +1,37 @@
+# Copyright 2026 Fractalyze Inc. All rights reserved.
+#
+# .github/workflows/merge-digest.yml
+#
+# Org-wide digest — install this in ONE repository only. It scans every repo in
+# the org, so a copy per repo would send duplicate messages.
+name: Merge Digest
+
+on:
+  schedule:
+    # 23:00 UTC, weekdays. Cron is UTC and GitHub delays scheduled runs under
+    # load, so since_hours below overlaps the window slightly.
+    - cron: '0 23 * * 1-5'
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Print the digest to the log instead of posting to Slack'
+        type: boolean
+        default: true
+
+jobs:
+  digest:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: fractalyze/github-actions/merge-digest@main
+        with:
+          github_token: ${{ secrets.ORG_READ_TOKEN }}
+          slack_bot_token: ${{ secrets.SLACK_BOT_TOKEN }}
+          slack_target: ${{ secrets.SLACK_DIGEST_TARGET }}
+          # 25h against a 24h cron: a PR on the boundary is occasionally
+          # reported twice, which is preferable to dropping it.
+          since_hours: '25'
+          exclude_authors: fractalyze-dev
+          # Switch to `summarize` and add anthropic_api_key for a Claude
+          # briefing above the listing.
+          mode: 'list'
+          dry_run: ${{ inputs.dry_run || 'false' }}
