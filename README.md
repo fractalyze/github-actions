@@ -57,3 +57,50 @@ Two scope validation modes:
 | `scope_mode`     | no       | `manual` (default) or `auto`                    |
 | `scopes`         | no       | Space-separated allowed scopes (manual mode)    |
 | `scope_prefixes` | no       | Directory prefixes to strip for auto derivation |
+
+### bzlmod-pin-sync
+
+Syncs a bzlmod `git_override` commit pin — and the pip pin that has to match it —
+onto one force-pushed branch, then creates or refreshes a single bump PR.
+
+The bzlmod sibling of `pin-bump`. That one rewrites `<PREFIX>_COMMIT` /
+`<PREFIX>_SHA256` in a `workspace.bzl`; a bzlmod consumer pins through a
+`git_override` commit and carries a `MODULE.bazel.lock` only `bazel mod deps` can
+refresh, so the file surgery and the lock refresh differ entirely.
+
+**Both pins move in one commit.** An upstream Bazel module resolves its own pip
+dependencies from its own lock, so bumping one side alone puts two copies of the
+same package on a single test's `sys.path` — which surfaces as a dtype error
+inside an unrelated test rather than as a version conflict. `paired_package` is
+read from the upstream `requirements.in` **at the target commit**, so the answer
+is what the consumer must match rather than whatever was published most recently.
+
+**One branch, force-pushed.** A branch per upstream commit cannot update an open
+PR, so it accumulates one PR per upstream commit — each staler than the last, each
+burning a CI run, with the pin worth merging at the bottom of the list.
+Re-cutting from the checked-out base also rebases for free.
+
+**Usage** (the caller owns its triggers; the runner needs bazel):
+
+```yaml
+- uses: actions/checkout@v4
+  with:
+    token: ${{ secrets.BUMPER_GH_PAT }}
+- uses: fractalyze/github-actions/bzlmod-pin-sync@main
+  with:
+    upstream_repo: hash-frx
+    module_name: hash_frx
+    paired_package: frx
+    github_token: ${{ secrets.BUMPER_GH_PAT }}
+```
+
+| Input                        | Required | Description                                              |
+| ---------------------------- | -------- | -------------------------------------------------------- |
+| `upstream_repo`              | yes      | Upstream repo name under fractalyze                      |
+| `module_name`                | yes      | Bazel module name of the dep                             |
+| `paired_package`             | no       | pip package to keep in step; empty syncs the commit only |
+| `requirements_in`            | no       | pip requirements source (`requirements.in`)              |
+| `requirements_lock`          | no       | compiled lock (`requirements_lock_3_11.txt`)             |
+| `requirements_update_target` | no       | lock recompile target (`//:requirements.update`)         |
+| `base_branch`                | no       | branch the PR targets (`main`)                           |
+| `github_token`               | yes      | PAT with repo scope for push and PR creation             |

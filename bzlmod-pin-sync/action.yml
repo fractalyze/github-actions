@@ -1,0 +1,179 @@
+# Copyright 2026 Fractalyze Inc. All rights reserved.
+
+name: 'Bzlmod Pin Sync'
+description: >-
+  Sync a bzlmod git_override commit pin, and the pip pin that must match it,
+  onto one force-pushed branch.
+author: 'fractalyze'
+
+# The bzlmod sibling of `pin-bump`. That one rewrites `<PREFIX>_COMMIT` and
+# `<PREFIX>_SHA256` in a `workspace.bzl`; a bzlmod consumer pins through a
+# `git_override` commit and carries a `MODULE.bazel.lock` that only
+# `bazel mod deps` can refresh, so the file surgery and the refresh differ
+# entirely even though the intent is the same.
+#
+# The two pins move in ONE commit on purpose. An upstream Bazel module resolves
+# its own pip dependencies from its own lock, so a consumer that bumps only one
+# side puts two copies of the same package on a single test's `sys.path`. That
+# surfaces as a type or dtype error inside an unrelated test rather than as a
+# version conflict, which is an expensive thing to debug and a cheap thing to
+# prevent.
+#
+# One branch, force-pushed. A branch per upstream commit cannot update an open
+# PR, so it accumulates one PR per upstream commit, each staler than the last and
+# each burning a CI run — with the pin worth merging at the bottom of the list.
+# Re-cutting from the checked-out default branch also rebases for free, so the
+# open PR cannot rot against it.
+
+inputs:
+  upstream_repo:
+    description: 'Upstream repository name under fractalyze (e.g. "hash-frx")'
+    required: true
+  module_name:
+    description: 'Bazel module name of the upstream dep (e.g. "hash_frx")'
+    required: true
+  paired_package:
+    description: >-
+      pip package whose version must match the upstream repo's own pin, read
+      from the upstream `requirements.in` AT the target commit. Empty disables
+      the pip half and syncs the commit pin alone.
+    required: false
+    default: ''
+  requirements_in:
+    description: 'Path to the pip requirements source'
+    required: false
+    default: 'requirements.in'
+  requirements_lock:
+    description: 'Path to the compiled pip lock'
+    required: false
+    default: 'requirements_lock_3_11.txt'
+  requirements_update_target:
+    description: 'Bazel target that recompiles the pip lock'
+    required: false
+    default: '//:requirements.update'
+  base_branch:
+    description: 'Branch the PR targets'
+    required: false
+    default: 'main'
+  github_token:
+    description: 'GitHub PAT with repo scope for push and PR creation'
+    required: true
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Sync the pins onto the bump branch
+      id: sync
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.github_token }}
+        UPSTREAM_REPO: ${{ inputs.upstream_repo }}
+        MODULE_NAME: ${{ inputs.module_name }}
+        PAIRED_PACKAGE: ${{ inputs.paired_package }}
+        REQUIREMENTS_IN: ${{ inputs.requirements_in }}
+        REQUIREMENTS_LOCK: ${{ inputs.requirements_lock }}
+        REQUIREMENTS_UPDATE_TARGET: ${{ inputs.requirements_update_target }}
+        BASE_BRANCH: ${{ inputs.base_branch }}
+      run: |
+        set -euo pipefail
+
+        upstream=$(git ls-remote "https://github.com/fractalyze/${UPSTREAM_REPO}.git" \
+                     "refs/heads/${BASE_BRANCH}" | cut -f1)
+        if [ -z "${upstream}" ]; then
+          echo "::error::could not resolve ${UPSTREAM_REPO} ${BASE_BRANCH}"
+          exit 1
+        fi
+
+        # Exactly one 40-hex commit pin lives in MODULE.bazel (the git_override).
+        # Bail rather than guess if that stops being true.
+        pinned=$(sed -n 's/^ *commit = "\([0-9a-f]\{40\}\)".*/\1/p' MODULE.bazel)
+        if [ "$(printf '%s' "${pinned}" | grep -c .)" != "1" ]; then
+          echo "::error::expected exactly one commit pin in MODULE.bazel for ${MODULE_NAME}, found: ${pinned}"
+          exit 1
+        fi
+
+        ours_pkg=""
+        upstream_pkg=""
+        if [ -n "${PAIRED_PACKAGE}" ]; then
+          # Read AT the target commit, so the answer is what this repo must match
+          # rather than whatever the package published most recently.
+          upstream_pkg=$(gh api "repos/fractalyze/${UPSTREAM_REPO}/contents/${REQUIREMENTS_IN}?ref=${upstream}" \
+                           --jq '.content' | base64 -d \
+                           | sed -n "s/^${PAIRED_PACKAGE}==\(.*\)$/\1/p")
+          ours_pkg=$(sed -n "s/^${PAIRED_PACKAGE}==\(.*\)$/\1/p" "${REQUIREMENTS_IN}")
+          if [ -z "${upstream_pkg}" ] || [ -z "${ours_pkg}" ]; then
+            echo "::error::could not read the ${PAIRED_PACKAGE} pin (upstream='${upstream_pkg}' ours='${ours_pkg}')"
+            exit 1
+          fi
+        fi
+
+        if [ "${pinned}" = "${upstream}" ] && [ "${ours_pkg}" = "${upstream_pkg}" ]; then
+          echo "pins are current (${MODULE_NAME} ${pinned:0:12}${PAIRED_PACKAGE:+, ${PAIRED_PACKAGE} ${ours_pkg}})"
+          echo "changed=false" >> "$GITHUB_OUTPUT"
+          exit 0
+        fi
+
+        branch="bump/${UPSTREAM_REPO}"
+        git checkout -B "${branch}"
+
+        body_pins=""
+        if [ "${pinned}" != "${upstream}" ]; then
+          sed -i "s/${pinned}/${upstream}/" MODULE.bazel
+          # The lock records the resolved module graph, so it moves with the pin;
+          # leaving it stale would put the drift in every contributor's next diff.
+          bazel mod deps >/dev/null
+          git add MODULE.bazel MODULE.bazel.lock
+          body_pins="${body_pins}- \`${MODULE_NAME}\` \`git_override\`: \`${pinned:0:12}\` -> \`${upstream:0:12}\`"$'\n'
+        fi
+        if [ -n "${PAIRED_PACKAGE}" ] && [ "${ours_pkg}" != "${upstream_pkg}" ]; then
+          # One version string covers a package and its siblings in the lock.
+          sed -i "s/${ours_pkg}/${upstream_pkg}/g" "${REQUIREMENTS_IN}"
+          bazel run "${REQUIREMENTS_UPDATE_TARGET}"
+          git add "${REQUIREMENTS_IN}" "${REQUIREMENTS_LOCK}"
+          body_pins="${body_pins}- ${PAIRED_PACKAGE} stack: \`${ours_pkg}\` -> \`${upstream_pkg}\`, matching ${UPSTREAM_REPO}'s lock"$'\n'
+        fi
+
+        git config user.name 'fractalyze-dev'
+        git config user.email 'fractalyze-dev@users.noreply.github.com'
+        git commit -m "build(deps): sync to ${UPSTREAM_REPO} ${upstream:0:12}"
+        git push --force origin "${branch}"
+
+        {
+          echo "changed=true"
+          echo "branch=${branch}"
+          echo "title=build(deps): sync to ${UPSTREAM_REPO} ${upstream:0:12}"
+          echo "body<<PR_BODY_EOF"
+          printf '%s\n' \
+            "${body_pins}" \
+            "Compare: https://github.com/fractalyze/${UPSTREAM_REPO}/compare/${pinned}...${upstream}" \
+            "" \
+            "The pins move together on purpose: ${UPSTREAM_REPO} resolves its pip dependencies from its own lock, so a lone bump on either side puts two copies of one package on a single test's \`sys.path\`." \
+            "" \
+            "CI is the review: the dependency guard exercises a real ${UPSTREAM_REPO} computation across the pin, so a break in the layer below fails here rather than inside a consumer." \
+            "" \
+            "Force-pushed in place as ${UPSTREAM_REPO} moves, so this PR is always the newest pin on the newest ${BASE_BRANCH}."
+          echo "PR_BODY_EOF"
+        } >> "$GITHUB_OUTPUT"
+
+    - name: Create or refresh the bump PR
+      if: steps.sync.outputs.changed == 'true'
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.github_token }}
+        BRANCH: ${{ steps.sync.outputs.branch }}
+        TITLE: ${{ steps.sync.outputs.title }}
+        BODY: ${{ steps.sync.outputs.body }}
+        BASE_BRANCH: ${{ inputs.base_branch }}
+      run: |
+        set -euo pipefail
+
+        # A force-push moves an open PR's head but leaves its title and body
+        # untouched, and both name the pin.
+        existing=$(gh pr list --head "${BRANCH}" --state open --json number --jq '.[0].number // empty')
+        if [ -n "${existing}" ]; then
+          echo "refreshing PR #${existing}"
+          gh pr edit "${existing}" --title "${TITLE}" --body "${BODY}"
+        else
+          gh pr create --base "${BASE_BRANCH}" --head "${BRANCH}" \
+            --title "${TITLE}" --body "${BODY}"
+        fi
