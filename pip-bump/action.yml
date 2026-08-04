@@ -38,7 +38,9 @@ runs:
         PACKAGES: ${{ inputs.packages }}
       run: |
         for pkg in $PACKAGES; do
-          sed -i "s/^${pkg}==.*/${pkg}==${VERSION}/" requirements.in
+          # A pin may carry a PEP 508 extras suffix ("pkg[extra]==..."); match
+          # and preserve it, or the extra'd pin is silently left un-bumped.
+          sed -i "s/^\(${pkg}\(\[[^]]*\]\)\?\)==.*/\1==${VERSION}/" requirements.in
         done
         echo "Updated requirements.in:"
         cat requirements.in
