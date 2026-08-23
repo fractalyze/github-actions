@@ -116,7 +116,6 @@ Re-cutting from the checked-out base also rebases for free.
 | `upstream_repo`              | yes      | Upstream repo name under fractalyze                        |
 | `module_name`                | yes      | Bazel module name of the dep                               |
 | `paired_packages`            | no       | pip packages to keep in step, newline- or comma-separated; empty syncs the commit only |
-| `paired_package`             | no       | **Deprecated**, use `paired_packages`. One package, rewritten across every line sharing its version |
 | `requirements_in`            | no       | pip requirements source (`requirements.in`)              |
 | `requirements_lock`          | no       | compiled lock (`requirements_lock_3_11.txt`)             |
 | `requirements_update_target` | no       | lock recompile target (`//:requirements.update`)         |

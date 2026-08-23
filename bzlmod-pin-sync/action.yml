@@ -56,15 +56,6 @@ inputs:
       syncs the commit pin alone.
     required: false
     default: ''
-  paired_package:
-    description: >-
-      DEPRECATED — use `paired_packages`. One package, rewritten across every
-      line in `requirements.in` carrying the same version, which is how the frx
-      stack moved as a unit. Kept so a caller that has not migrated still syncs
-      its pip half rather than silently degrading to a commit-pin-only bump.
-      Ignored when `paired_packages` is set.
-    required: false
-    default: ''
   requirements_in:
     description: 'Path to the pip requirements source'
     required: false
@@ -96,7 +87,6 @@ runs:
         UPSTREAM_REPO: ${{ inputs.upstream_repo }}
         MODULE_NAME: ${{ inputs.module_name }}
         PAIRED_PACKAGES: ${{ inputs.paired_packages }}
-        PAIRED_PACKAGE: ${{ inputs.paired_package }}
         REQUIREMENTS_IN: ${{ inputs.requirements_in }}
         REQUIREMENTS_LOCK: ${{ inputs.requirements_lock }}
         REQUIREMENTS_UPDATE_TARGET: ${{ inputs.requirements_update_target }}
@@ -119,16 +109,10 @@ runs:
           exit 1
         fi
 
-        # `paired_packages` wins; the singular input is the un-migrated caller.
-        legacy_stack=0
         packages=""
         if [ -n "${PAIRED_PACKAGES}" ]; then
           packages=$(printf '%s' "${PAIRED_PACKAGES}" | tr ',' '\n' \
                        | tr -d '[:blank:]' | grep -v '^$' || true)
-        elif [ -n "${PAIRED_PACKAGE}" ]; then
-          echo "::warning::'paired_package' is deprecated; switch to 'paired_packages' and list every package both hubs resolve, including each member of the frx stack."
-          packages=$(printf '%s' "${PAIRED_PACKAGE}" | tr -d '[:blank:]')
-          legacy_stack=1
         fi
 
         # Read the upstream source ONCE, AT the target commit, so every answer is
@@ -182,23 +166,11 @@ runs:
         if [ -n "${moves}" ]; then
           while read -r pkg ours up; do
             [ -n "${pkg}" ] || continue
-            if [ "${legacy_stack}" = "1" ]; then
-              # Deprecated path: one version covers a package and its release-train
-              # siblings. Matched on the whole version FIELD rather than as a
-              # substring, so it moves the same lines the old `s/ours/up/g` did
-              # without reaching inside a longer version on another line.
-              awk -v old="${ours}" -v v="${up}" '
-                { i = index($0, "==")
-                  if (i > 0 && substr($0, i + 2) == old) { print substr($0, 1, i + 1) v; next }
-                  print }' "${REQUIREMENTS_IN}" > "${REQUIREMENTS_IN}.tmp"
-              body_pins="${body_pins}- ${pkg} stack: \`${ours}\` -> \`${up}\`, matching ${UPSTREAM_REPO}'s lock"$'\n'
-            else
-              awk -v p="${pkg}" -v v="${up}" '
-                index($0, p "==") == 1 { print p "==" v; next }
-                { print }' "${REQUIREMENTS_IN}" > "${REQUIREMENTS_IN}.tmp"
-              body_pins="${body_pins}- \`${pkg}\`: \`${ours}\` -> \`${up}\`, matching ${UPSTREAM_REPO}'s lock"$'\n'
-            fi
+            awk -v p="${pkg}" -v v="${up}" '
+              index($0, p "==") == 1 { print p "==" v; next }
+              { print }' "${REQUIREMENTS_IN}" > "${REQUIREMENTS_IN}.tmp"
             mv "${REQUIREMENTS_IN}.tmp" "${REQUIREMENTS_IN}"
+            body_pins="${body_pins}- \`${pkg}\`: \`${ours}\` -> \`${up}\`, matching ${UPSTREAM_REPO}'s lock"$'\n'
           done <<< "${moves}"
           # Recompile once, after every pin has moved.
           bazel run "${REQUIREMENTS_UPDATE_TARGET}"
