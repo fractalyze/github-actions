@@ -21,10 +21,12 @@ author: 'fractalyze'
 # version conflict, which is an expensive thing to debug and a cheap thing to
 # prevent.
 #
-# Which is why the pip half takes a LIST. Every package both hubs resolve is
-# subject to the same hazard, not just the one that shares the upstream's
-# release train, and a package left off the list drifts silently until something
-# downstream trips on it.
+# Which is why the pip half takes a LIST, and why that list is required. Every
+# package both hubs resolve is subject to the same hazard, not just the one that
+# shares the upstream's release train, and a package left off the list drifts
+# silently until something downstream trips on it. An empty list would move the
+# commit pin while leaving every pip pin behind, which is the lone-sided bump
+# described above, so it is an error rather than a mode.
 #
 # Each listed package is matched on its own name — the literal prefix `<pkg>==`,
 # never a regex — and rewritten to the version upstream carries for that name.
@@ -52,10 +54,11 @@ inputs:
       from the upstream `requirements.in` AT the target commit. Newline- or
       comma-separated. Each is matched and rewritten on its own name, so a set
       of packages that share a release train (frx, frxlib, frx-cuda12-pjrt,
-      frx-cuda12-plugin) must list every member. Empty disables the pip half and
-      syncs the commit pin alone.
-    required: false
-    default: ''
+      frx-cuda12-plugin) must list every member. Required, and empty is an
+      error: a bump that moves the commit pin while leaving the pip pins behind
+      is the lone-sided bump this action exists to prevent, so there is no
+      configuration that asks for one.
+    required: true
   requirements_in:
     description: 'Path to the pip requirements source'
     required: false
@@ -109,20 +112,23 @@ runs:
           exit 1
         fi
 
-        packages=""
-        if [ -n "${PAIRED_PACKAGES}" ]; then
-          packages=$(printf '%s' "${PAIRED_PACKAGES}" | tr ',' '\n' \
-                       | tr -d '[:blank:]' | grep -v '^$' || true)
+        packages=$(printf '%s' "${PAIRED_PACKAGES}" | tr ',' '\n' \
+                     | tr -d '[:blank:]' | grep -v '^$' || true)
+        # `required: true` is advisory on a composite action — the runner does
+        # not enforce it — so the check lives here. It also catches a caller
+        # still passing the removed `paired_package`: an undeclared input never
+        # reaches this script, so it arrives as nothing and would otherwise sync
+        # the commit pin alone, silently.
+        if [ -z "${packages}" ]; then
+          echo "::error::paired_packages is empty. List every pip package both hubs resolve (e.g. frx, frxlib, frx-cuda12-pjrt, frx-cuda12-plugin, zk-dtypes). If you are migrating from the removed 'paired_package' input, this is its replacement."
+          exit 1
         fi
 
         # Read the upstream source ONCE, AT the target commit, so every answer is
         # what this repo must match rather than whatever was published most
         # recently.
-        upstream_reqs=""
-        if [ -n "${packages}" ]; then
-          upstream_reqs=$(gh api "repos/fractalyze/${UPSTREAM_REPO}/contents/${REQUIREMENTS_IN}?ref=${upstream}" \
-                            --jq '.content' | base64 -d)
-        fi
+        upstream_reqs=$(gh api "repos/fractalyze/${UPSTREAM_REPO}/contents/${REQUIREMENTS_IN}?ref=${upstream}" \
+                          --jq '.content' | base64 -d)
 
         # `<pkg>==` as a literal prefix, so a '.' or '-' in a package name is not
         # a regex metacharacter, and `frx==` never matches `frxlib==`.
