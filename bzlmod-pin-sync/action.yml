@@ -21,10 +21,12 @@ author: 'fractalyze'
 # version conflict, which is an expensive thing to debug and a cheap thing to
 # prevent.
 #
-# Which is why the pip half takes a LIST. Every package both hubs resolve is
-# subject to the same hazard, not just the one that shares the upstream's
-# release train, and a package left off the list drifts silently until something
-# downstream trips on it.
+# Which is why the pip half takes a LIST, and why that list is required. Every
+# package both hubs resolve is subject to the same hazard, not just the one that
+# shares the upstream's release train, and a package left off the list drifts
+# silently until something downstream trips on it. An empty list would move the
+# commit pin while leaving every pip pin behind, which is the lone-sided bump
+# described above, so it is an error rather than a mode.
 #
 # Each listed package is matched on its own name — the literal prefix `<pkg>==`,
 # never a regex — and rewritten to the version upstream carries for that name.
@@ -52,19 +54,11 @@ inputs:
       from the upstream `requirements.in` AT the target commit. Newline- or
       comma-separated. Each is matched and rewritten on its own name, so a set
       of packages that share a release train (frx, frxlib, frx-cuda12-pjrt,
-      frx-cuda12-plugin) must list every member. Empty disables the pip half and
-      syncs the commit pin alone.
-    required: false
-    default: ''
-  paired_package:
-    description: >-
-      DEPRECATED — use `paired_packages`. One package, rewritten across every
-      line in `requirements.in` carrying the same version, which is how the frx
-      stack moved as a unit. Kept so a caller that has not migrated still syncs
-      its pip half rather than silently degrading to a commit-pin-only bump.
-      Ignored when `paired_packages` is set.
-    required: false
-    default: ''
+      frx-cuda12-plugin) must list every member. Required, and empty is an
+      error: a bump that moves the commit pin while leaving the pip pins behind
+      is the lone-sided bump this action exists to prevent, so there is no
+      configuration that asks for one.
+    required: true
   requirements_in:
     description: 'Path to the pip requirements source'
     required: false
@@ -96,7 +90,6 @@ runs:
         UPSTREAM_REPO: ${{ inputs.upstream_repo }}
         MODULE_NAME: ${{ inputs.module_name }}
         PAIRED_PACKAGES: ${{ inputs.paired_packages }}
-        PAIRED_PACKAGE: ${{ inputs.paired_package }}
         REQUIREMENTS_IN: ${{ inputs.requirements_in }}
         REQUIREMENTS_LOCK: ${{ inputs.requirements_lock }}
         REQUIREMENTS_UPDATE_TARGET: ${{ inputs.requirements_update_target }}
@@ -119,26 +112,23 @@ runs:
           exit 1
         fi
 
-        # `paired_packages` wins; the singular input is the un-migrated caller.
-        legacy_stack=0
-        packages=""
-        if [ -n "${PAIRED_PACKAGES}" ]; then
-          packages=$(printf '%s' "${PAIRED_PACKAGES}" | tr ',' '\n' \
-                       | tr -d '[:blank:]' | grep -v '^$' || true)
-        elif [ -n "${PAIRED_PACKAGE}" ]; then
-          echo "::warning::'paired_package' is deprecated; switch to 'paired_packages' and list every package both hubs resolve, including each member of the frx stack."
-          packages=$(printf '%s' "${PAIRED_PACKAGE}" | tr -d '[:blank:]')
-          legacy_stack=1
+        packages=$(printf '%s' "${PAIRED_PACKAGES}" | tr ',' '\n' \
+                     | tr -d '[:blank:]' | grep -v '^$' || true)
+        # `required: true` is advisory on a composite action — the runner does
+        # not enforce it — so the check lives here. It also catches a caller
+        # still passing the removed `paired_package`: an undeclared input never
+        # reaches this script, so it arrives as nothing and would otherwise sync
+        # the commit pin alone, silently.
+        if [ -z "${packages}" ]; then
+          echo "::error::paired_packages is empty. List every pip package both hubs resolve (e.g. frx, frxlib, frx-cuda12-pjrt, frx-cuda12-plugin, zk-dtypes). If you are migrating from the removed 'paired_package' input, this is its replacement."
+          exit 1
         fi
 
         # Read the upstream source ONCE, AT the target commit, so every answer is
         # what this repo must match rather than whatever was published most
         # recently.
-        upstream_reqs=""
-        if [ -n "${packages}" ]; then
-          upstream_reqs=$(gh api "repos/fractalyze/${UPSTREAM_REPO}/contents/${REQUIREMENTS_IN}?ref=${upstream}" \
-                            --jq '.content' | base64 -d)
-        fi
+        upstream_reqs=$(gh api "repos/fractalyze/${UPSTREAM_REPO}/contents/${REQUIREMENTS_IN}?ref=${upstream}" \
+                          --jq '.content' | base64 -d)
 
         # `<pkg>==` as a literal prefix, so a '.' or '-' in a package name is not
         # a regex metacharacter, and `frx==` never matches `frxlib==`.
@@ -182,23 +172,11 @@ runs:
         if [ -n "${moves}" ]; then
           while read -r pkg ours up; do
             [ -n "${pkg}" ] || continue
-            if [ "${legacy_stack}" = "1" ]; then
-              # Deprecated path: one version covers a package and its release-train
-              # siblings. Matched on the whole version FIELD rather than as a
-              # substring, so it moves the same lines the old `s/ours/up/g` did
-              # without reaching inside a longer version on another line.
-              awk -v old="${ours}" -v v="${up}" '
-                { i = index($0, "==")
-                  if (i > 0 && substr($0, i + 2) == old) { print substr($0, 1, i + 1) v; next }
-                  print }' "${REQUIREMENTS_IN}" > "${REQUIREMENTS_IN}.tmp"
-              body_pins="${body_pins}- ${pkg} stack: \`${ours}\` -> \`${up}\`, matching ${UPSTREAM_REPO}'s lock"$'\n'
-            else
-              awk -v p="${pkg}" -v v="${up}" '
-                index($0, p "==") == 1 { print p "==" v; next }
-                { print }' "${REQUIREMENTS_IN}" > "${REQUIREMENTS_IN}.tmp"
-              body_pins="${body_pins}- \`${pkg}\`: \`${ours}\` -> \`${up}\`, matching ${UPSTREAM_REPO}'s lock"$'\n'
-            fi
+            awk -v p="${pkg}" -v v="${up}" '
+              index($0, p "==") == 1 { print p "==" v; next }
+              { print }' "${REQUIREMENTS_IN}" > "${REQUIREMENTS_IN}.tmp"
             mv "${REQUIREMENTS_IN}.tmp" "${REQUIREMENTS_IN}"
+            body_pins="${body_pins}- \`${pkg}\`: \`${ours}\` -> \`${up}\`, matching ${UPSTREAM_REPO}'s lock"$'\n'
           done <<< "${moves}"
           # Recompile once, after every pin has moved.
           bazel run "${REQUIREMENTS_UPDATE_TARGET}"
