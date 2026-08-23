@@ -2,7 +2,7 @@
 
 name: 'Bzlmod Pin Sync'
 description: >-
-  Sync a bzlmod git_override commit pin, and the pip pin that must match it,
+  Sync a bzlmod git_override commit pin, and the pip pins that must match it,
   onto one force-pushed branch.
 author: 'fractalyze'
 
@@ -12,12 +12,26 @@ author: 'fractalyze'
 # `bazel mod deps` can refresh, so the file surgery and the refresh differ
 # entirely even though the intent is the same.
 #
-# The two pins move in ONE commit on purpose. An upstream Bazel module resolves
-# its own pip dependencies from its own lock, so a consumer that bumps only one
-# side puts two copies of the same package on a single test's `sys.path`. That
+# The pins move in ONE commit on purpose. An upstream Bazel module resolves its
+# own pip dependencies from its own lock, so a consumer that bumps only one side
+# puts two copies of the same package on a single test's `sys.path`. Exactly one
+# of them is imported — whichever hub the `imports` depset reaches first, which
+# BUILD dependency order decides and so differs between targets in one repo. It
 # surfaces as a type or dtype error inside an unrelated test rather than as a
 # version conflict, which is an expensive thing to debug and a cheap thing to
 # prevent.
+#
+# Which is why the pip half takes a LIST. Every package both hubs resolve is
+# subject to the same hazard, not just the one that shares the upstream's
+# release train, and a package left off the list drifts silently until something
+# downstream trips on it.
+#
+# Each listed package is matched on its own name — the literal prefix `<pkg>==`,
+# never a regex — and rewritten to the version upstream carries for that name.
+# The version string is never itself used as a search pattern: it is short and
+# unanchored (`0.0.1` is a prefix of `0.0.16`, and matches inside a dev
+# datestamp such as `0.10.2.dev20260822060712`), so pattern-matching on it
+# corrupts unrelated pins in the same file.
 #
 # One branch, force-pushed. A branch per upstream commit cannot update an open
 # PR, so it accumulates one PR per upstream commit, each staler than the last and
@@ -32,11 +46,23 @@ inputs:
   module_name:
     description: 'Bazel module name of the upstream dep (e.g. "hash_frx")'
     required: true
+  paired_packages:
+    description: >-
+      pip packages whose versions must match the upstream repo's own pins, read
+      from the upstream `requirements.in` AT the target commit. Newline- or
+      comma-separated. Each is matched and rewritten on its own name, so a set
+      of packages that share a release train (frx, frxlib, frx-cuda12-pjrt,
+      frx-cuda12-plugin) must list every member. Empty disables the pip half and
+      syncs the commit pin alone.
+    required: false
+    default: ''
   paired_package:
     description: >-
-      pip package whose version must match the upstream repo's own pin, read
-      from the upstream `requirements.in` AT the target commit. Empty disables
-      the pip half and syncs the commit pin alone.
+      DEPRECATED — use `paired_packages`. One package, rewritten across every
+      line in `requirements.in` carrying the same version, which is how the frx
+      stack moved as a unit. Kept so a caller that has not migrated still syncs
+      its pip half rather than silently degrading to a commit-pin-only bump.
+      Ignored when `paired_packages` is set.
     required: false
     default: ''
   requirements_in:
@@ -69,6 +95,7 @@ runs:
         GH_TOKEN: ${{ inputs.github_token }}
         UPSTREAM_REPO: ${{ inputs.upstream_repo }}
         MODULE_NAME: ${{ inputs.module_name }}
+        PAIRED_PACKAGES: ${{ inputs.paired_packages }}
         PAIRED_PACKAGE: ${{ inputs.paired_package }}
         REQUIREMENTS_IN: ${{ inputs.requirements_in }}
         REQUIREMENTS_LOCK: ${{ inputs.requirements_lock }}
@@ -92,23 +119,50 @@ runs:
           exit 1
         fi
 
-        ours_pkg=""
-        upstream_pkg=""
-        if [ -n "${PAIRED_PACKAGE}" ]; then
-          # Read AT the target commit, so the answer is what this repo must match
-          # rather than whatever the package published most recently.
-          upstream_pkg=$(gh api "repos/fractalyze/${UPSTREAM_REPO}/contents/${REQUIREMENTS_IN}?ref=${upstream}" \
-                           --jq '.content' | base64 -d \
-                           | sed -n "s/^${PAIRED_PACKAGE}==\(.*\)$/\1/p")
-          ours_pkg=$(sed -n "s/^${PAIRED_PACKAGE}==\(.*\)$/\1/p" "${REQUIREMENTS_IN}")
-          if [ -z "${upstream_pkg}" ] || [ -z "${ours_pkg}" ]; then
-            echo "::error::could not read the ${PAIRED_PACKAGE} pin (upstream='${upstream_pkg}' ours='${ours_pkg}')"
-            exit 1
-          fi
+        # `paired_packages` wins; the singular input is the un-migrated caller.
+        legacy_stack=0
+        packages=""
+        if [ -n "${PAIRED_PACKAGES}" ]; then
+          packages=$(printf '%s' "${PAIRED_PACKAGES}" | tr ',' '\n' \
+                       | tr -d '[:blank:]' | grep -v '^$' || true)
+        elif [ -n "${PAIRED_PACKAGE}" ]; then
+          echo "::warning::'paired_package' is deprecated; switch to 'paired_packages' and list every package both hubs resolve, including each member of the frx stack."
+          packages=$(printf '%s' "${PAIRED_PACKAGE}" | tr -d '[:blank:]')
+          legacy_stack=1
         fi
 
-        if [ "${pinned}" = "${upstream}" ] && [ "${ours_pkg}" = "${upstream_pkg}" ]; then
-          echo "pins are current (${MODULE_NAME} ${pinned:0:12}${PAIRED_PACKAGE:+, ${PAIRED_PACKAGE} ${ours_pkg}})"
+        # Read the upstream source ONCE, AT the target commit, so every answer is
+        # what this repo must match rather than whatever was published most
+        # recently.
+        upstream_reqs=""
+        if [ -n "${packages}" ]; then
+          upstream_reqs=$(gh api "repos/fractalyze/${UPSTREAM_REPO}/contents/${REQUIREMENTS_IN}?ref=${upstream}" \
+                            --jq '.content' | base64 -d)
+        fi
+
+        # `<pkg>==` as a literal prefix, so a '.' or '-' in a package name is not
+        # a regex metacharacter, and `frx==` never matches `frxlib==`.
+        read_pin() {
+          awk -v p="$1" 'index($0, p "==") == 1 { print substr($0, length(p) + 3); exit }'
+        }
+
+        moves=""
+        summary=""
+        for pkg in ${packages}; do
+          up=$(printf '%s\n' "${upstream_reqs}" | read_pin "${pkg}")
+          ours=$(read_pin "${pkg}" < "${REQUIREMENTS_IN}")
+          if [ -z "${up}" ] || [ -z "${ours}" ]; then
+            echo "::error::could not read the ${pkg} pin (upstream='${up}' ours='${ours}')"
+            exit 1
+          fi
+          summary="${summary}, ${pkg} ${ours}"
+          if [ "${ours}" != "${up}" ]; then
+            moves="${moves}${pkg} ${ours} ${up}"$'\n'
+          fi
+        done
+
+        if [ "${pinned}" = "${upstream}" ] && [ -z "${moves}" ]; then
+          echo "pins are current (${MODULE_NAME} ${pinned:0:12}${summary})"
           echo "changed=false" >> "$GITHUB_OUTPUT"
           exit 0
         fi
@@ -125,12 +179,30 @@ runs:
           git add MODULE.bazel MODULE.bazel.lock
           body_pins="${body_pins}- \`${MODULE_NAME}\` \`git_override\`: \`${pinned:0:12}\` -> \`${upstream:0:12}\`"$'\n'
         fi
-        if [ -n "${PAIRED_PACKAGE}" ] && [ "${ours_pkg}" != "${upstream_pkg}" ]; then
-          # One version string covers a package and its siblings in the lock.
-          sed -i "s/${ours_pkg}/${upstream_pkg}/g" "${REQUIREMENTS_IN}"
+        if [ -n "${moves}" ]; then
+          while read -r pkg ours up; do
+            [ -n "${pkg}" ] || continue
+            if [ "${legacy_stack}" = "1" ]; then
+              # Deprecated path: one version covers a package and its release-train
+              # siblings. Matched on the whole version FIELD rather than as a
+              # substring, so it moves the same lines the old `s/ours/up/g` did
+              # without reaching inside a longer version on another line.
+              awk -v old="${ours}" -v v="${up}" '
+                { i = index($0, "==")
+                  if (i > 0 && substr($0, i + 2) == old) { print substr($0, 1, i + 1) v; next }
+                  print }' "${REQUIREMENTS_IN}" > "${REQUIREMENTS_IN}.tmp"
+              body_pins="${body_pins}- ${pkg} stack: \`${ours}\` -> \`${up}\`, matching ${UPSTREAM_REPO}'s lock"$'\n'
+            else
+              awk -v p="${pkg}" -v v="${up}" '
+                index($0, p "==") == 1 { print p "==" v; next }
+                { print }' "${REQUIREMENTS_IN}" > "${REQUIREMENTS_IN}.tmp"
+              body_pins="${body_pins}- \`${pkg}\`: \`${ours}\` -> \`${up}\`, matching ${UPSTREAM_REPO}'s lock"$'\n'
+            fi
+            mv "${REQUIREMENTS_IN}.tmp" "${REQUIREMENTS_IN}"
+          done <<< "${moves}"
+          # Recompile once, after every pin has moved.
           bazel run "${REQUIREMENTS_UPDATE_TARGET}"
           git add "${REQUIREMENTS_IN}" "${REQUIREMENTS_LOCK}"
-          body_pins="${body_pins}- ${PAIRED_PACKAGE} stack: \`${ours_pkg}\` -> \`${upstream_pkg}\`, matching ${UPSTREAM_REPO}'s lock"$'\n'
         fi
 
         git config user.name 'fractalyze-dev'
