@@ -185,7 +185,16 @@ runs:
 
         git config user.name 'fractalyze-dev'
         git config user.email 'fractalyze-dev@users.noreply.github.com'
-        git commit -m "build(deps): sync to ${UPSTREAM_REPO} ${upstream:0:12}"
+        # See pin-bump: fractal-commit-lint requires a body on non-docs
+        # commits, so a bodyless sync cannot merge.
+        git commit -F - <<EOF
+        build(deps): sync to ${UPSTREAM_REPO} ${upstream:0:12}
+
+        Automated dependency sync to ${UPSTREAM_REPO}@${upstream}.
+
+        Mirrors the pins that repo moved, so this tree resolves the same
+        versions it does.
+        EOF
         git push --force origin "${branch}"
 
         {

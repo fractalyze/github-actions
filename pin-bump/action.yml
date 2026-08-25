@@ -131,7 +131,17 @@ runs:
         fi
 
         echo "has_changes=true" >> "$GITHUB_OUTPUT"
-        git commit -m "build: bump ${UPSTREAM_REPO} to ${SHORT_HASH}"
+        # A body is not optional: fractal-commit-lint rejects every non-docs
+        # commit without one, so a bodyless bump blocks its own PR and has to
+        # be amended by hand before it can merge.
+        git commit -F - <<EOF
+        build: bump ${UPSTREAM_REPO} to ${SHORT_HASH}
+
+        Automated pin bump to ${UPSTREAM_REPO}@${UPSTREAM_COMMIT}.
+
+        Review the upstream range for behavior changes before merging; this
+        commit only moves the pin and its checksum.
+        EOF
         git push --force origin "${BRANCH}"
 
     - name: Create or update PR
