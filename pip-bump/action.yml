@@ -71,7 +71,15 @@ runs:
         fi
 
         echo "has_changes=true" >> "$GITHUB_OUTPUT"
-        git commit -m "build: bump ${PACKAGES// /\/} to ${VERSION}"
+        # See pin-bump: fractal-commit-lint requires a body on non-docs
+        # commits, so a bodyless bump cannot merge.
+        git commit -F - <<EOF
+        build: bump ${PACKAGES// /\/} to ${VERSION}
+
+        Automated dependency bump to ${VERSION}.
+
+        Regenerated the lock file; review the upstream changelog before merging.
+        EOF
         git push --force origin "${BRANCH}"
 
     - name: Create or update PR
