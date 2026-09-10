@@ -17,9 +17,15 @@ inputs:
       Newline-separated for a repo that declares the same pin in more than one
       place — a repo with both a WORKSPACE and a MODULE.bazel build carries the
       upstream commit twice, once per lane, and a bump that moves only one lane
-      leaves the two building different revisions of the same dependency. Every
-      listed file is rewritten with the same substitution, so each must spell
-      the pin as `<VAR_PREFIX>_COMMIT` / `<VAR_PREFIX>_SHA256`.
+      leaves the two building different revisions of the same dependency.
+
+      Every listed file must carry `<VAR_PREFIX>_COMMIT`. The digest is written
+      whichever way that file's rule takes it: `<VAR_PREFIX>_SHA256` for the hex
+      an `http_archive` wants, `<VAR_PREFIX>_INTEGRITY` for the base64
+      `archive_override` wants. Both are rewritten where present, so a file
+      needs only the one it uses. Keeping the values behind prefixed variables
+      is what lets a file hold several overrides without a substitution
+      reaching into the wrong one.
     required: true
   var_prefix:
     description: 'Variable name prefix (e.g., "ZK_DTYPES", "PRIME_IR")'
@@ -64,8 +70,11 @@ runs:
           echo "::error::Failed to compute SHA256 for ${TARBALL_URL}"
           exit 1
         fi
+        # Same digest, base64: what a bzlmod `archive_override` takes.
+        INTEGRITY="sha256-$(echo "${SHA256}" | xxd -r -p | base64 -w0)"
 
         echo "sha256=${SHA256}" >> "$GITHUB_OUTPUT"
+        echo "integrity=${INTEGRITY}" >> "$GITHUB_OUTPUT"
         echo "Computed SHA256: ${SHA256}"
 
     - name: Configure git remote with PAT
@@ -85,6 +94,7 @@ runs:
         PIN_FILE: ${{ inputs.pin_file }}
         VAR_PREFIX: ${{ inputs.var_prefix }}
         NEW_SHA256: ${{ steps.sha256.outputs.sha256 }}
+        NEW_INTEGRITY: ${{ steps.sha256.outputs.integrity }}
         TRANSITIVE_PINS: ${{ inputs.transitive_pins }}
       run: |
         BRANCH="chore/bump-${UPSTREAM_REPO}"
@@ -108,6 +118,7 @@ runs:
           fi
           sed -i "s/${VAR_PREFIX}_COMMIT = \"[a-f0-9]*\"/${VAR_PREFIX}_COMMIT = \"${UPSTREAM_COMMIT}\"/" "${PIN_PATH}"
           sed -i "s/${VAR_PREFIX}_SHA256 = \"[a-f0-9]*\"/${VAR_PREFIX}_SHA256 = \"${NEW_SHA256}\"/" "${PIN_PATH}"
+          sed -i "s|${VAR_PREFIX}_INTEGRITY = \"sha256-[A-Za-z0-9+/=]*\"|${VAR_PREFIX}_INTEGRITY = \"${NEW_INTEGRITY}\"|" "${PIN_PATH}"
           # A listed file that does not carry the pin is a config error: it
           # silently protects nothing, which is the drift this input prevents.
           if ! grep -q "${VAR_PREFIX}_COMMIT = \"${UPSTREAM_COMMIT}\"" "${PIN_PATH}"; then
