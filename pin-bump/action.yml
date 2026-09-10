@@ -12,7 +12,14 @@ inputs:
     description: 'Upstream commit hash to bump to'
     required: true
   pin_file:
-    description: 'Path to the pin file (e.g., "third_party/zk_dtypes/workspace.bzl")'
+    description: >-
+      Path to the pin file (e.g. "third_party/zk_dtypes/workspace.bzl").
+      Newline-separated for a repo that declares the same pin in more than one
+      place — a repo with both a WORKSPACE and a MODULE.bazel build carries the
+      upstream commit twice, once per lane, and a bump that moves only one lane
+      leaves the two building different revisions of the same dependency. Every
+      listed file is rewritten with the same substitution, so each must spell
+      the pin as `<VAR_PREFIX>_COMMIT` / `<VAR_PREFIX>_SHA256`.
     required: true
   var_prefix:
     description: 'Variable name prefix (e.g., "ZK_DTYPES", "PRIME_IR")'
@@ -89,10 +96,26 @@ runs:
         # Create or reset the branch from current HEAD
         git checkout -B "${BRANCH}"
 
-        # Update primary pin file
-        sed -i "s/${VAR_PREFIX}_COMMIT = \"[a-f0-9]*\"/${VAR_PREFIX}_COMMIT = \"${UPSTREAM_COMMIT}\"/" "${PIN_FILE}"
-        sed -i "s/${VAR_PREFIX}_SHA256 = \"[a-f0-9]*\"/${VAR_PREFIX}_SHA256 = \"${NEW_SHA256}\"/" "${PIN_FILE}"
-        git add "${PIN_FILE}"
+        # Update the primary pin file(s). One path is the common case; a repo
+        # that builds both lanes lists the WORKSPACE pin and the MODULE.bazel
+        # override, which have to move together.
+        while IFS= read -r PIN_PATH; do
+          PIN_PATH="$(echo "${PIN_PATH}" | xargs)"
+          [ -z "${PIN_PATH}" ] && continue
+          if [ ! -f "${PIN_PATH}" ]; then
+            echo "::error::pin_file does not exist: ${PIN_PATH}"
+            exit 1
+          fi
+          sed -i "s/${VAR_PREFIX}_COMMIT = \"[a-f0-9]*\"/${VAR_PREFIX}_COMMIT = \"${UPSTREAM_COMMIT}\"/" "${PIN_PATH}"
+          sed -i "s/${VAR_PREFIX}_SHA256 = \"[a-f0-9]*\"/${VAR_PREFIX}_SHA256 = \"${NEW_SHA256}\"/" "${PIN_PATH}"
+          # A listed file that does not carry the pin is a config error: it
+          # silently protects nothing, which is the drift this input prevents.
+          if ! grep -q "${VAR_PREFIX}_COMMIT = \"${UPSTREAM_COMMIT}\"" "${PIN_PATH}"; then
+            echo "::error::${PIN_PATH} has no ${VAR_PREFIX}_COMMIT to update"
+            exit 1
+          fi
+          git add "${PIN_PATH}"
+        done <<< "${PIN_FILE}"
 
         # Sync transitive dependencies from upstream's pin files
         if [ -n "$TRANSITIVE_PINS" ]; then
