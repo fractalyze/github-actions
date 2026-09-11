@@ -4,6 +4,27 @@ Shared GitHub Actions for fractalyze organization.
 
 ## Available Actions
 
+### merge-digest
+
+Posts a digest of pull requests merged across the whole org to a Slack DM or
+channel, on a schedule. Runs from one repository, not per repo.
+
+**Usage:**
+
+```yaml
+- uses: fractalyze/github-actions/merge-digest@main
+  with:
+    github_token: ${{ secrets.ORG_READ_TOKEN }}
+    slack_bot_token: ${{ secrets.SLACK_BOT_TOKEN }}
+    slack_target: ${{ secrets.SLACK_DIGEST_TARGET }}
+    exclude_authors: fractalyze-dev
+```
+
+Defaults to a per-repo listing with no LLM call; set `mode: summarize` with an
+`anthropic_api_key` to prepend a Claude briefing that reads across repositories.
+
+See [merge-digest/README.md](./merge-digest/README.md) for details.
+
 ### knowledge-extractor
 
 Extracts knowledge from merged PRs and stores in the central knowledge-graph

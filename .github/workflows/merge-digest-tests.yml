@@ -1,0 +1,25 @@
+# Copyright 2026 Fractalyze Inc. All rights reserved.
+
+name: merge-digest tests
+
+on:
+  pull_request:
+    paths:
+      - 'merge-digest/**'
+      - '.github/workflows/merge-digest-tests.yml'
+  push:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # digest.py runs on a bare runner with no install step, so the only
+      # dependency guard needed is that it imports under the runner's python3.
+      - name: digest.py imports with stdlib only
+        run: python3 -c "import importlib.util as u; s=u.spec_from_file_location('d','merge-digest/digest.py'); m=u.module_from_spec(s); s.loader.exec_module(m)"
+
+      - name: functional tests (mocked HTTP)
+        run: bash merge-digest/tests/test_digest.sh
